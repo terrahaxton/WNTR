@@ -1,16 +1,19 @@
+.. raw:: latex
+
+    \clearpage
+
 Acknowledgements
 ======================================
 
-The United States Environmental Protection Agency through its Office of Research and Development funded and collaborated 
-in the research described here under an Interagency Agreement with the Department of Energy's Sandia National Laboratories.
-It has been subjected to the Agency's review and has been approved for publication. Note that approval does not signify that 
-the contents necessarily reflect the views of the Agency. Mention of trade names products, or services does not convey official 
-EPA approval, endorsement, or recommendation.  
+WNTR is developed through a collaboration between U.S. Environmental Protection Agency, Sandia National
+Laboratories, and the open-source community. The U.S. Environmental Protection Agency acknowledges the
+additional contributors to the WNTR tool, which can be found on the WNTR GitHub site at https://github.com/USEPA/WNTR/graphs/contributors.
 
-Sandia National Laboratories is a multi-mission laboratory managed and operated by Sandia Corporation, a wholly 
-owned subsidiary of Lockheed Martin Corporation, for the U.S. Department of Energy's National Nuclear Security 
-Administration under contract DE-AC04-94AL85000.
 
-.. raw:: latex
+.. 
+   The U.S. Environmental Protection Agency acknowledges the technical review of the WNTR software and user manual and/or technical editing provided by the following individuals:
 
-    \newpage
+   * Eun Jeong Cha, University of Illinois
+   * Sudhir Kshirsagar, Global Quality Corp
+   * Marti Sinclair, Alion Science and Technology, for Attain
+

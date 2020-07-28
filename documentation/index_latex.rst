@@ -1,26 +1,30 @@
-WNTR 0.1 documentation
+WNTR documentation
 ==================================
 
 .. toctree::
    :maxdepth: 1
 
-   acknowledgements
+   disclaimer
    acronyms
+   acknowledgements
    overview
    installation
    framework
    units
    getting_started
    waternetworkmodel
+   controls
    networkxgraph
+   layers
    hydraulics
    waterquality
    resultsobject
    disaster_models
    resilience
    stochastic
+   morph
+   graphics
    license
    developers
-   API documentation <apidoc/wntr>
    reference
    

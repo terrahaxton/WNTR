@@ -1,5 +1,9 @@
-WNTR documentation (**DRAFT**)
-===================================
+.. figure:: figures/logo.png
+   :scale: 100 %
+   :alt: Logo
+   
+The Water Network Tool for Resilience (WNTR) is an EPANET compatible Python package 
+designed to simulate and analyze resilience of water distribution networks.
 
 .. toctree::
    :maxdepth: 1
@@ -10,13 +14,17 @@ WNTR documentation (**DRAFT**)
    units
    getting_started
    waternetworkmodel
+   controls
    networkxgraph
+   layers
    hydraulics
    waterquality
    resultsobject
    disaster_models
    resilience
    stochastic
+   morph
+   graphics
    license
    whatsnew
    developers
@@ -26,11 +34,15 @@ WNTR documentation (**DRAFT**)
 
 Citing WNTR
 -----------------
-To cite WNTR, use the following reference:
+To cite WNTR, use one of the following references:
 
-* Klise, K.A., Murray, R., Bynum, M., Moriarty, D., (2016), Water Network Tool for Resilience, Version 0.1, Technical Report SAND2016-11253, Sandia National Laboratories.
+* Klise, K.A., Murray, R., Haxton, T. (2018). An overview of the Water Network Tool for Resilience (WNTR), In Proceedings of the 1st International WDSA/CCWI Joint Conference, Kingston, Ontario, Canada, July 23-25, 075, 8p.
 
-USEPA Disclaimer
+* Klise, K.A., Bynum, M., Moriarty, D., Murray, R. (2017). A software framework for assessing the resilience of drinking water systems to disasters with an example earthquake case study, Environmental Modelling and Software, 95, 420-431, doi: 10.1016/j.envsoft.2017.06.022
+
+* Klise, K.A., Hart, D.B., Moriarty, D., Bynum, M., Murray, R., Burkhardt, J., Haxton, T. (2017). Water Network Tool for Resilience (WNTR) User Manual, U.S. Environmental Protection Agency Technical Report, EPA/600/R-17/264, 47p.
+
+US EPA Disclaimer
 ---------------------
 
 The U.S. Environmental Protection Agency through its Office of Research and Development funded and collaborated 
@@ -42,9 +54,9 @@ EPA approval, endorsement, or recommendation.
 Sandia Funding Statement
 --------------------------------
 
-Sandia National Laboratories is a multi-mission laboratory managed and operated by Sandia Corporation, a wholly 
-owned subsidiary of Lockheed Martin Corporation, for the U.S. Department of Energy's National Nuclear Security 
-Administration under contract DE-AC04-94AL85000.
+Sandia National Laboratories is a multimission laboratory managed and operated by National Technology and 
+Engineering Solutions of Sandia, LLC., a wholly owned subsidiary of Honeywell International, Inc., for the 
+U.S. Department of Energy's National Nuclear Security Administration under contract DE-NA-0003525.
 
 Indices and tables
 ==================

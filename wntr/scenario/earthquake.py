@@ -6,7 +6,6 @@ compute PGA, PGV, and repair rate.
 from __future__ import print_function
 import wntr
 import numpy as np
-import networkx as nx
 import pandas as pd
 from scipy.spatial import distance
 
@@ -35,19 +34,17 @@ class Earthquake(object):
 
         Returns
         ---------
-        R : pd.Series
-            Distance to epicenter (m)
+        A pandas Series with distance to epicenter (m)
         """
-        G = wn.get_graph_deep_copy()
-        pos = nx.get_node_attributes(G,'pos')
+
         R = pd.Series()
 
         if element_type in [wntr.network.Link, wntr.network.Pipe, wntr.network.Pump, wntr.network.Valve]:
             # Compute pipe center position
             link_pos = {}
             for name, link in wn.links(element_type):
-                start_point = pos[link.start_node]
-                end_point = pos[link.end_node]
+                start_point = link.start_node.coordinates
+                end_point = link.end_node.coordinates
                 link_pos[name] = ((end_point[0] + start_point[0])/2,
                                   (end_point[1] + start_point[1])/2)
 
@@ -56,7 +53,7 @@ class Earthquake(object):
 
         elif element_type in [wntr.network.Node, wntr.network.Junction, wntr.network.Tank, wntr.network.Reservoir]:
             for name, node in wn.nodes(element_type):
-                R[name] = distance.euclidean(self.epicenter, pos[name]) # m
+                R[name] = distance.euclidean(self.epicenter, node.coordinates) # m
 
         return R
 
@@ -76,8 +73,7 @@ class Earthquake(object):
 
         Returns
         --------
-        PGA : pd.Series
-            Peak ground acceleration (g)
+        A pandas Series with peak ground acceleration (g)
         """
         R = R/1000 # convert m to km
         D = self.depth/1000 # convert m to km
@@ -119,8 +115,7 @@ class Earthquake(object):
 
         Returns
         --------
-        PGV : pd.Series
-            Peak ground velocity (m/s)
+        A pandas Series with peak ground velocity (m/s)
         """
         R = R/1000 # convert m to km
 
@@ -142,8 +137,19 @@ class Earthquake(object):
     def correction_factor(self, pipe_characteristics, diameter_weight=None, material_weight=None,
                           topography_weight=None, liquifaction_weight=None):
         """
-        Correction factor
-        Defaults based on Isoyama et al., 2000
+        Correction factor, maps pipe characteristics to weights
+        
+        Parameters
+        -----------
+        pipe_characteristics : pd.DataFrame
+            Pipe characteristics which includes diameter, material, topography, and liquifaction
+        
+        diameter_weight, material_weight, topography_weight, liquifaction_weight: dict
+            Weights, defaults based on Isoyama et al., 2000
+            
+        Returns
+        --------
+        A pandas Series with the correction factor
         """
 
         # Make sure the values are strings
@@ -189,8 +195,7 @@ class Earthquake(object):
 
         Returns
         -------
-        Repair rate : pd.Series
-            Number of repairs per m
+        A pandas Series with repair rate (number of repairs per m)
         """
         PGV = (100*PGV)/2.54 # in/s
 

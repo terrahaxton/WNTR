@@ -10,9 +10,9 @@ Submodules
 ----------
 
 .. toctree::
-
+    
+   wntr.metrics.topographic
    wntr.metrics.hydraulic
-   wntr.metrics.water_quality
    wntr.metrics.water_security
    wntr.metrics.economic
    wntr.metrics.misc

@@ -1,132 +1,178 @@
 """
 The wntr.metrics.hydraulic module contains hydraulic metrics.
+
+.. rubric:: Contents
+
+.. autosummary::
+
+    expected_demand
+    average_expected_demand
+    water_service_availability
+    todini_index
+    entropy
+
 """
 import wntr.network
-from wntr.network.graph import _all_simple_paths
-#from wntr.metrics.misc import _average_attribute
 import numpy as np
 import pandas as pd
 import networkx as nx
 import math
 from collections import Counter
-
+import sys
+if sys.version_info >= (3,0):
+    from functools import reduce
+    
 import logging
 
 logger = logging.getLogger(__name__)
 
-def fdv(node_results, average_times=False, average_nodes=False):
+def expected_demand(wn, start_time=None, end_time=None, timestep=None):
     """
-    Compute fraction delivered volume (FDV), equations modified from [1].
-    The metric can be averaged over times and/or nodes.
+    Compute expected demand at each junction and time using base demands
+    and demand patterns along with the demand multiplier
+    
+    Parameters
+    -----------
+    wn : wntr WaterNetworkModel
+        Water network model
+        
+    start_time : int (optional)
+        Start time in seconds, if None then value is set to 0
+        
+    end_time : int  (optional)
+        End time in seconds, if None then value is set to wn.options.time.duration
 
+    timestep : int (optional)
+        Timestep, if None then value is set to wn.options.time.report_timestep
+    
+    Returns
+    -------
+    A pandas DataFrame that contains expected demand in m3/s
+    (index = times, columns = junction names).
+    """
+    if start_time is None:
+        start_time = 0
+    if end_time is None:
+        end_time = wn.options.time.duration
+    if timestep is None:
+        timestep = wn.options.time.report_timestep
+        
+    exp_demand = {}
+    tsteps = np.arange(start_time, end_time+timestep, timestep)
+    for name, junc in wn.junctions():
+        dem = []
+        for ts in tsteps:
+            dem.append(junc.demand_timeseries_list.at(ts, 
+                       multiplier=wn.options.hydraulic.demand_multiplier))
+        exp_demand[name] = dem 
+    
+    exp_demand = pd.DataFrame(index=tsteps, data=exp_demand)
+    
+    return exp_demand
+
+def average_expected_demand(wn):
+    """
+    Compute average expected demand per day at each junction using base demands
+    and demand patterns along with the demand multiplier
+    
+    Parameters
+    -----------
+    wn : wntr WaterNetworkModel
+        Water network model
+        
+    Returns
+    -------
+    A pandas Series that contains average expected demand in m3/s
+    (index = junction names).
+    """
+    L = [24*3600] # start with a 24 hour pattern
+    for name, pattern in wn.patterns():
+        L.append(len(pattern.multipliers)*wn.options.time.pattern_timestep)
+    lcm = int(_lcml(L))
+    
+    start_time = wn.options.time.pattern_start
+    end_time = start_time+lcm
+    timestep = wn.options.time.pattern_timestep
+        
+    exp_demand = expected_demand(wn, start_time, end_time-timestep, timestep)
+    ave_exp_demand = exp_demand.mean(axis=0)
+
+    return ave_exp_demand
+
+def _gcd(x,y):
+  while y:
+    if y<0:
+      x,y=-x,-y
+    x,y=y,x % y
+    return x
+
+def _gcdl(*list):
+  return reduce(_gcd, *list)
+
+def _lcm(x,y):
+  return x*y / _gcd(x,y)
+
+def _lcml(*list):
+  return reduce(_lcm, *list)
+
+def water_service_availability(expected_demand, demand):
+    """
+    Compute water service availability (WSA) at junctions, defined as follows:
+        
+    .. math:: WSA = \dfrac{demand}{expected\_demand}
+        
+    where 
+    :math:`demand` is the actual demand computed from a hydraulic simulation, and 
+    :math:`expected\_demand` is the expected demand computed from base demands and demand 
+    patterns. Expected demand can be computed using the 
+    :class:`~wntr.metrics.hydraulic.expected_demand` method.
+
+    WSA can be averaged over times and/or nodes (see below).  If 
+    expected demand is 0 for a particular junction, water service availability 
+    will be set to NaN for that junction. 
+
+    * To compute water service availability for each junction and timestep, 
+      expected_demand and demand should be pandas DataFrames (index = times, columns = junction names). 
+    
+    * To compute an average water service availability for each junction (averaged over time), 
+      expected_demand and demand should be a pandas Series, indexed by junction.  
+      To convert a DataFrame (index = times, columns = junction names) to a 
+      Series indexed by junction, use the following code:
+    
+        :math:`expected\_demand.sum(axis=0)`
+		
+        :math:`demand.sum(axis=0)`
+    
+    * To compute an average water service availability for each timestep (averaged over junctions), 
+      expected_demand and demand should be a pandas Series, indexed by time.  
+      To convert a DataFrame (index = times, columns = junction names) to a 
+      Series indexed by time, use the following code:
+        
+        :math:`expected\_demand.sum(axis=1)`
+		
+        :math:`demand.sum(axis=1)`
+        
     Parameters
     ----------
-    node_results : pd.Panel
-        A pandas Panel containing node results.
-        Items axis = attributes, Major axis = times, Minor axis = node names
-        FDV uses 'expected demand' and 'demand' attrbutes.
-
-    average_times : bool (default = False)
-        Flag to determine if calculations are to be averaged over each time
-        step. If false, FDV calculations will be performed for each time step.
-        If true, FDV calculations will be averaged over all time steps.
-
-    average_nodes : bool (default = False)
-        Flag to determine if calculations are to be averaged over each node.
-        If false, FDV calculations will be performed for each node. If true, FDV
-        calculations will be averaged over all nodes.
+    expected_demand : pandas DataFrame or pandas Series (see note above)
+        Expected demand.  
+    
+    demand : pandas DataFrame or pandas Series (see note above)
+        Actual demand (generally from a PDD hydraulic simulation)
 
     Returns
     -------
-    fdv : pd.DataFrame, pd.Series, or scalar (depending on node and time averaging)
-        Fraction of delivered volume
-
-    References
-    ----------
-    [1] Ostfeld A, Kogan D, Shamir U. (2002). Reliability simulation of water
-    distribution systems - single and multiquality, Urban Water, 4, 53-61
+    A pandas DataFrame or pandas Series that contains water service 
+    availability.
     """
 
-    exp_demand = _average_attribute(node_results['expected_demand'], average_times, average_nodes)
-    act_received = _average_attribute(node_results['demand'], average_times, average_nodes)
+    wsa = demand.div(expected_demand) 
+    
+    return wsa
 
-    # Calculate FDV
-    fdv = act_received / exp_demand
-
-    # Replace NaNs (generated by nodes with 0 demand)
-    try:
-        fdv = fdv.fillna(1)
-    except:
-        if exp_demand == 0:
-            fdv = 1
-
-    return fdv
-
-def fdd(node_results, Dstar, average_times=False, average_nodes=False):
+def todini_index(head, pressure, demand, flowrate, wn, Pstar):
     """
-    Compute fraction delivered demand (FDD), equations modified from [1].
-    The metric can be averaged over times and/or nodes.
-
-    Parameters
-    ----------
-    node_results : pd.Panel
-        A pandas Panel containing node results.
-        Items axis = attributes, Major axis = times, Minor axis = node names
-        FDD uses 'expected demand' and 'demand' attrbutes.
-
-    Dstar : float
-        Threshold demand factor
-
-    average_times : bool (default = False)
-        Flag to determine if calculations are to be averaged over each time
-        step. If false, FDV calculations will be performed for each time step.
-        If true, FDV calculations will be averaged over all time steps.
-
-    average_nodes : bool (default = False)
-        Flag to determine if calculations are to be averaged over each node.
-        If false, FDV calculations will be performed for each node. If true, FDV
-        calculations will be averaged over all nodes.
-
-    Returns
-    -------
-    fdd : pd.DataFrame, pd.Series, or scalar (depending on node and time averaging)
-        Fraction of delivered demand
-
-    References
-    ----------
-    [1] Ostfeld A, Kogan D, Shamir U. (2002). Reliability simulation of water
-    distribution systems - single and multiquality, Urban Water, 4, 53-61
-    """
-
-    fdv_metric = fdv(node_results, average_times, average_nodes)
-
-    # Calculate FDD
-    fdd = (fdv_metric >= Dstar)+0
-
-    return fdd
-
-def _average_attribute(attribute, average_times, average_nodes):
-     # Average for all times and nodes
-    if average_times==False and average_nodes==False:
-        pass
-
-    # Average for all nodes (averaged over all times)
-    if average_times==True and average_nodes==False:
-        attribute = attribute.sum(axis=0)
-
-    # Average for all time (averaged over all nodes)
-    if average_times==False and average_nodes==True:
-        attribute = attribute.sum(axis=1)
-
-    # Average for scenario (averaged over all times and nodes)
-    if average_times==True and average_nodes==True:
-        attribute = attribute.sum().sum()
-
-    return attribute
-
-def todini(node_results, link_results, wn, Pstar):
-    """
-    Compute Todini index, equations from [1].
+    Compute Todini index, equations from [Todi00]_.
 
     The Todini index is related to the capability of a system to overcome
     failures while still meeting demands and pressures at the nodes. The
@@ -135,31 +181,32 @@ def todini(node_results, link_results, wn, Pstar):
 
     Parameters
     ----------
-    node_results : pd.Panel
-        A pandas Panel containing node results.
-        Items axis = attributes, Major axis = times, Minor axis = node names
-        todini index uses 'head', 'pressure', and 'demand' attrbutes.
+    head : pandas DataFrame
+        A pandas Dataframe containing node head 
+        (index = times, columns = node names).
+        
+    pressure : pandas DataFrame
+        A pandas Dataframe containing node pressure 
+        (index = times, columns = node names).
+        
+    demand : pandas DataFrame
+        A pandas Dataframe containing node demand 
+        (index = times, columns = node names).
+        
+    flowrate : pandas DataFrame
+        A pandas Dataframe containing pump flowrates 
+        (index = times, columns = pump names).
 
-    link_results : pd.Panel
-        A pandas Panel containing link results.
-        Items axis = attributes, Major axis = times, Minor axis = link names
-        todini index uses the 'flowrate' attrbute.
-
-    wn : Water Network Model
-        A water network model.  The water network model is needed to find the start and end node to each pump.
+    wn : wntr WaterNetworkModel
+        Water network model.  The water network model is needed to 
+        find the start and end node to each pump.
 
     Pstar : float
         Pressure threshold.
 
     Returns
     -------
-    todini_index : pd.Series
-        Time-series of Todini indexes
-
-    References
-    -----------
-    [1] Todini E. (2000). Looped water distribution networks design using a
-    resilience index based heuristic approach. Urban Water, 2(2), 115-122.
+    A pandas Series that contains a time-series of Todini indexes
     """
 
     POut = {}
@@ -167,38 +214,40 @@ def todini(node_results, link_results, wn, Pstar):
     PInRes = {}
     PInPump = {}
 
-    for name, node in wn.nodes(wntr.network.Junction):
-        h = np.array(node_results.loc['head',:,name]) # m
-        p = np.array(node_results.loc['pressure',:,name])
+    time = head.index
+    
+    for name in wn.junction_name_list:
+        h = np.array(head.loc[:,name]) # m
+        p = np.array(pressure.loc[:,name])
         e = h - p # m
-        q = np.array(node_results.loc['demand',:,name]) # m3/s
+        q = np.array(demand.loc[:,name]) # m3/s
         POut[name] = q*h
         PExp[name] = q*(Pstar+e)
 
     for name, node in wn.nodes(wntr.network.Reservoir):
-        H = np.array(node_results.loc['head',:,name]) # m
-        Q = np.array(node_results.loc['demand',:,name]) # m3/s
+        H = np.array(head.loc[:,name]) # m
+        Q = np.array(demand.loc[:,name]) # m3/s
         PInRes[name] = -Q*H # switch sign on Q.
 
     for name, link in wn.links(wntr.network.Pump):
-        start_node = link._start_node_name
-        end_node = link._end_node_name
-        h_start = np.array(node_results.loc['head',:,start_node]) # (m)
-        h_end = np.array(node_results.loc['head',:,end_node]) # (m)
+        start_node = link.start_node_name
+        end_node = link.end_node_name
+        h_start = np.array(head.loc[:,start_node]) # (m)
+        h_end = np.array(head.loc[:,end_node]) # (m)
         h = h_start - h_end # (m)
-        q = np.array(link_results.loc['flowrate',:,name]) # (m^3/s)
+        q = np.array(flowrate.loc[:,name]) # (m^3/s)
         PInPump[name] = q*(abs(h)) # assumes that pumps always add energy to the system
 
-    todini_index = (sum(POut.values()) - sum(PExp.values()))/  \
+    todini = (sum(POut.values()) - sum(PExp.values()))/  \
         (sum(PInRes.values()) + sum(PInPump.values()) - sum(PExp.values()))
 
-    todini_index = pd.Series(data = todini_index.tolist(), index = node_results.major_axis)
+    todini = pd.Series(data = todini.tolist(), index = time)
 
-    return todini_index
+    return todini
 
 def entropy(G, sources=None, sinks=None):
     """
-    Compute entropy, equations from [1].
+    Compute entropy, equations from [AwGB90]_.
 
     Entropy is a measure of uncertainty in a random variable.
     In a water distribution network model, the random variable is
@@ -220,24 +269,16 @@ def entropy(G, sources=None, sinks=None):
 
     Returns
     -------
-    S : dict
-        Node entropy, {node name: entropy value}
-
-    Shat : float
-        System entropy
-
-    References
-    -----------
-    [1] Awumah K, Goulter I, Bhatt SK. (1990). Assessment of reliability in
-    water distribution networks using entropy based measures. Stochastic
-    Hydrology and Hydraulics, 4(4), 309-320
+    A tuple which includes:
+        - A pandas Series that contains entropy for each node
+        - System entropy (float)
     """
 
     if G.is_directed() == False:
         return
 
     if sources is None:
-        sources = [key for key,value in nx.get_node_attributes(G,'type').items() if value == 'reservoir' ]
+        sources = [key for key,value in nx.get_node_attributes(G,'type').items() if value == 'Reservoir' ]
 
     if sinks is None:
         sinks = G.nodes()
@@ -250,10 +291,10 @@ def entropy(G, sources=None, sinks=None):
             continue
 
         sp = [] # simple path
-        if G.node[nodej]['type']  == 'junction':
+        if G.nodes[nodej]['type']  == 'Junction':
             for source in sources:
                 if nx.has_path(G, source, nodej):
-                    simple_paths = _all_simple_paths(G,source,target=nodej)
+                    simple_paths = nx.all_simple_paths(G,source,target=nodej)
                     sp = sp + ([p for p in simple_paths])
                     # all_simple_paths was modified to check 'has_path' in the
                     # loop, but this is still slow for large networks
@@ -310,13 +351,15 @@ def entropy(G, sources=None, sinks=None):
     Q0 = sum(nx.get_edge_attributes(G, 'weight').values())
 
     # Equation 3
-    Shat = 0
+    S_ave = 0
     for nodej in sinks:
         if not np.isnan(S[nodej]):
             if nodej not in sources:
                 if Q[nodej]/Q0 > 0:
-                    Shat = Shat + \
+                    S_ave = S_ave + \
                         (Q[nodej]*S[nodej])/Q0 - \
                         Q[nodej]/Q0*math.log(Q[nodej]/Q0)
-
-    return [S, Shat]
+                        
+    S = pd.Series(S) # convert S to a series
+    
+    return [S, S_ave]

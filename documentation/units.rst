@@ -1,11 +1,15 @@
-﻿Units
+.. raw:: latex
+
+    \clearpage
+
+Units
 ======================================
 
-All data in WNTR is stored in SI (International System) units:
+All data in WNTR is stored in the following SI (International System) units:
 
 * Length = :math:`m`
 * Diameter = :math:`m`
-* Water pressure = :math:`m`
+* Water pressure = :math:`m` (this assumes a fluid density of 1000 :math:`kg/m^3`)
 * Elevation = :math:`m`
 * Mass = :math:`kg`
 * Time = :math:`s`
@@ -15,108 +19,84 @@ All data in WNTR is stored in SI (International System) units:
 * Acceleration = :math:`g` (1 :math:`g` = 9.81 :math:`m/s^2`)
 * Energy = :math:`J`
 * Power = :math:`W`
-* Pressure = :math:`Pa`
 * Mass injection = :math:`kg/s`
 * Volume = :math:`m^3`
 
-WNTR is compatible with all EPANET unit conventions.  When using an EPANET INP file to 
-generate a water network model, WNTR uses the specific internal units defined by the 
-**Units** and **Quality** options in the EPANET INP file.  
-Together, these define the mass and flow units for the model.
+When setting up analysis in WNTR, all input values should be specified in SI units. 
+All simulation results are also stored in SI units and can be converted to other units if desired.
+The SymPy Python package can be used to convert between units [JCMG11]_.  
+
+EPANET unit conventions
+------------------------
+
+WNTR can generate water network models from EPANET INP files using all EPANET unit conventions. 
+When using an EPANET INP file to generate a water network model, 
+WNTR converts model parameters to SI units using the
+**Units** and **Quality** options of the EPANET INP file.  
+These options define the mass and flow units used in the file.
 Some units also depend on the equation used
 for pipe roughness headloss and on the reaction order specified. 
-:numref:`table-hydraulic-units`, :numref:`table-quality-units`, and :numref:`table-energy-units` provide information on EPANET unit conventions (modified from [Ross00]_).  
 
-.. _table-hydraulic-units:
-.. table:: EPANET hydraulic unit conventions.
+For reference, :numref:`table-epanet-units` includes EPANET unit conventions [Ross00]_.  
+
+.. _table-epanet-units:
+.. table:: EPANET INP File Unit Conventions
 
    +----------------------+-------------------------------------+------------------------------------+
-   | **Hydraulic**        | **US Customary units**              | **SI-based units**                 |
-   | **Parameter**        |                                     |                                    |
+   |   Parameter          |   US customary units                |   SI-based units                   |
    +======================+=====================================+====================================+
-   | Flow                 | *flow* can be defined as:           | *flow* can be defined as:          |
-   |                      |                                     |                                    |
-   |                      | - CFS: ft³/s                        | - LPS: L/s                         |
-   |                      | - GPM: gal/min                      | - LPM: L/min                       |
-   |                      | - MGD: million gal/day              | - MLD: ML/day                      |
-   |                      | - IMGD: million imperial gal/day    | - CMH: m³/hr                       |
-   |                      | - AFD: acre-feet/day                | - CMD: m³/day                      |
+   | Concentration        |  *mass* /L where *mass* can be      |  *mass* /L where *mass* can be     |
+   |                      |  defined as mg or ug                |  defined as mg or ug               |
    +----------------------+-------------------------------------+------------------------------------+
-   | Demand               |   *flow*                            |   *flow*                           |
+   | Demand               |   Same as *flow*                    |   Same as *flow*                   |
    +----------------------+-------------------------------------+------------------------------------+
-   | Diameter: pipes      |   in                                |   mm                               |
+   | Diameter (Pipes)     |   in                                |   mm                               |
    +----------------------+-------------------------------------+------------------------------------+
-   | Diameter: tanks      |   ft                                |   m                                |
+   | Diameter (Tanks)     |   ft                                |   m                                |
+   +----------------------+-------------------------------------+------------------------------------+
+   | Efficiency (Pumps)   |   percent                           | percent                            |
    +----------------------+-------------------------------------+------------------------------------+
    | Elevation            |   ft                                |   m                                |
+   +----------------------+-------------------------------------+------------------------------------+
+   | Emitter coefficient  |   *flow* / sqrt(psi)                |  *flow* / sqrt(m)                  |
+   +----------------------+-------------------------------------+------------------------------------+
+   | Energy               |   kW-hours                          | kW-hours                           |
+   +----------------------+-------------------------------------+------------------------------------+
+   | Flow                 | - CFS: ft :sup:`3` /s               | - LPS: L/s                         |
+   |                      | - GPM: gal/min                      | - LPM: L/min                       |
+   |                      | - MGD: million gal/day              | - MLD: million L/day               |
+   |                      | - IMGD: million imperial gal/day    | - CMH: m :sup:`3` /hr              |
+   |                      | - AFD: acre-feet/day                | - CMD: m :sup:`3` /day             |
+   +----------------------+-------------------------------------+------------------------------------+
+   | Friction factor      |  unitless                           |  unitless                          |
    +----------------------+-------------------------------------+------------------------------------+
    | Hydraulic head       |   ft                                |   m                                |
    +----------------------+-------------------------------------+------------------------------------+
    | Length               |   ft                                |   m                                |
    +----------------------+-------------------------------------+------------------------------------+
-   | Emitter coefficient  |   *flow* / vpsi                     |  *flow* / vm                       |
-   +----------------------+-------------------------------------+------------------------------------+
-   | Friction factor      |  unitless                           |  unitless                          |
-   +----------------------+-------------------------------------+------------------------------------+
    | Minor loss           |  unitless                           |  unitless                          |
-   | coeff.               |                                     |                                    |
+   | coefficient          |                                     |                                    |
    +----------------------+-------------------------------------+------------------------------------+
-   | Pressure             |   psi                               |   m   or   kPa                     |
+   | Power                |   horsepower                        |   kW                               |
    +----------------------+-------------------------------------+------------------------------------+
-   | Roughness coeff:     |   10³ ft                            |   mm                               |
-   | D-W                  |                                     |                                    |
+   | Pressure             |   psi                               |   m                                |
    +----------------------+-------------------------------------+------------------------------------+
-   | Roughness coeff:     | unitless                            |  unitless                          |
-   | H-W, C-M             |                                     |                                    |
+   | Reaction             |   1/day (1st-order)                 |  1/day (1st-order)                 |
+   | coefficient (Bulk)   |                                     |                                    |
+   +----------------------+-------------------------------------+------------------------------------+
+   | Reaction             | - *mass* /ft/day (0-order)          | - *mass* /m/day (0-order)          |
+   | coefficient (Wall)   | - ft/day (1st-order)                | - m/day (1st-order)                |
+   +----------------------+-------------------------------------+------------------------------------+
+   | Roughness            | - 10 :sup:`-3` ft (Darcy-Weisbach)  | - mm (Darcy-Weisbach)              |
+   | coefficient          | - unitless (otherwise)              | - unitless (otherwise)             |
+   +----------------------+-------------------------------------+------------------------------------+
+   | Source mass          |   *mass* /min                       | *mass* /min                        |
+   | injection rate       |                                     |                                    |
    +----------------------+-------------------------------------+------------------------------------+
    | Velocity             |   ft/s                              |   m/s                              |
    +----------------------+-------------------------------------+------------------------------------+
-   | Volume               |   ft³                               |   m³                               |
-   +----------------------+-------------------------------------+------------------------------------+
-
-.. _table-quality-units:
-.. table:: EPANET water quality unit conventions.
-
-   +----------------------+-------------------------------------+------------------------------------+
-   | **Water Quality**    | **US Customary units**              | **SI-based units**                 |
-   | **Parameter**        |                                     |                                    |
-   +======================+=====================================+====================================+
-   | Concentration        |  *mass* /L where *mass* can be      |  *mass* /L where *mass* can be     |
-   |                      |  defined as mg or ug                |  defined as mg or ug               |
-   +----------------------+-------------------------------------+------------------------------------+
-   | Bulk reaction        |   1/day                             |  1/day                             |
-   | coefficient: order-1 |                                     |                                    |
-   +----------------------+-------------------------------------+------------------------------------+
-   | Wall reaction        |   *mass* /ft²/day                   |   *mass* /m²/day                   |
-   | coefficient: order-0 |                                     |                                    |
-   +----------------------+-------------------------------------+------------------------------------+
-   | Wall reaction        |   ft/day                            |   m/day                            |
-   | coefficient: order-1 |                                     |                                    |
-   +----------------------+-------------------------------------+------------------------------------+
-   | Reaction rate        |   *mass* /L/day                     | *mass* /L/day                      |
-   +----------------------+-------------------------------------+------------------------------------+
-   | Source mass          |   *mass* /min                       |   *mass* /min                      |
-   | injection rate       |                                     |                                    |
+   | Volume               |   ft :sup:`3`                       |   m :sup:`3`                       |
    +----------------------+-------------------------------------+------------------------------------+
    | Water age            |   hours                             | hours                              |
    +----------------------+-------------------------------------+------------------------------------+
-   
-.. _table-energy-units:
-.. table:: EPANET energy unit conventions.
-
-   +----------------------+-------------------------------------+------------------------------------+
-   | **Energy Parameter** | **US Customary units**              | **SI-based units**                 |
-   +======================+=====================================+====================================+
-   | Energy               |   kW-hours                          | kW-hours                           |
-   +----------------------+-------------------------------------+------------------------------------+
-   | Efficiency (pumps)   |   percent                           | percent                            |
-   +----------------------+-------------------------------------+------------------------------------+
-   | Power                |   hp (horse-power)                  |   kW                               |
-   +----------------------+-------------------------------------+------------------------------------+
-
-When running analysis in WNTR, all input values (i.e., time, pressure threshold, node demand) should be specified in SI units. 
-All simulation results are also stored in SI units and can be converted to other units if desired.
-The SymPy package can be used to convert between units.  The example **converting_units.py**
-demonstrates its use.
-
-.. literalinclude:: ../examples/converting_units.py
+  

@@ -1,13 +1,30 @@
-List of acronyms
+.. raw:: latex
+
+    \clearpage
+	\listoftables
+	\clearpage
+	\listoffigures
+	\clearpage
+
+Abbreviations
 ======================================
 
-**API**: Application Programming Interface
+**API**: Application programming interface
 
-**IDE**: Interactive Development Environment
+**CSV**: Comma-separated values 
+
+**EPA**: Environmental Protection Agency
+
+**HDF**: Hierarchical Data Format
+
+**IDE**: Integrated development environment
+
+**JSON**: JavaScript Object Notation
 
 **SI**: International System of Units
 
-**USEPA**: United States Environmental Protection Agency
+**SQL**: Structured Query Language
+
+**US**: United States
 
 **WNTR**: Water Network Tool for Resilience
-
