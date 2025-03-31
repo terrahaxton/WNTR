@@ -1,7 +1,9 @@
+"""Fuctions to set up a default handler for WNTR that will output to the console and to wntr.log."""
+
 import logging
 logging.getLogger('wntr').addHandler(logging.NullHandler())
 
-class _LogWrapper(object):
+class _LogWrapper(object):  # pragma: no cover
     initialized = None
 
     def __init__(self):
@@ -21,7 +23,7 @@ class _LogWrapper(object):
             logger.addHandler(fh)
             logger.addHandler(ch)
 
-def start_logging():
+def start_logging():  # pragma: no cover
     """
     Start the wntr logger.
     """

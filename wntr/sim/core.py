@@ -1,7 +1,9 @@
+"""The core abstract and base classes for WNTR simulations.
+"""
+
 import wntr.sim.hydraulics
 from wntr.sim.solvers import NewtonSolver, SolverStatus
 import wntr.sim.results
-from wntr.network.controls import ControlManager, _ControlType
 import numpy as np
 import warnings
 import time
@@ -13,10 +15,25 @@ import scipy.sparse.csr
 import itertools
 from collections import OrderedDict
 from wntr.utils.ordered_set import OrderedSet
-from wntr.network import Junction, Pipe, Valve, Pump, Tank, Reservoir, LinkStatus
+from wntr.network import Junction, Pipe, Valve, Pump, Tank, Reservoir, LinkStatus, WaterNetworkModel, Link
 from wntr.sim.network_isolation import check_for_isolated_junctions, get_long_size
 from wntr.sim.aml.aml import VarDict, ParamDict
 from wntr.sim.aml.expr import Var, Param
+from wntr.network.controls import (AndCondition, Comparison, Control, ControlAction,
+                                   ControlChangeTracker, ControlChecker, ControlPriority, OrCondition,
+                                   RelativeCondition, Rule, SimTimeCondition,
+                                   TankLevelCondition, TimeOfDayCondition, ValueCondition,
+                                   _ActiveFCVCondition, _ActivePRVCondition,
+                                   _ActivePSVCondition, _CloseCVCondition,
+                                   _CloseHeadPumpCondition, _ClosePowerPumpCondition,
+                                   _ClosePRVCondition, _ClosePSVCondition, _ControlType,
+                                   _InternalControlAction, _OpenCVCondition,
+                                   _OpenFCVCondition, _OpenHeadPumpCondition,
+                                   _OpenPowerPumpCondition, _OpenPRVCondition,
+                                   _OpenPSVCondition, FunctionCondition, Observer,
+                                   ControlBase, BaseControlAction)
+from typing import Optional
+import networkx as nx
 import enum
 import pandas as pd
 import json
@@ -40,15 +57,20 @@ class WaterNetworkSimulator(object):
     wn : WaterNetworkModel object
         Water network model
 
-    mode: string (optional)
-        Specifies whether the simulation will be demand-driven (DD) or
-        pressure dependent demand (PDD), default = DD
+    .. warning::
+
+        The mode parameter has been deprecated. Please set the mode using the network option,
+        wn.options.hydraulic.demand_model.
+
+    
     """
 
-    def __init__(self, wn=None, mode='DD'):
+    def __init__(self, wn=None):
 
         self._wn = wn
-        self.mode = mode
+        # self.mode = mode
+        self.mode = self._wn.options.hydraulic.demand_model
+
 
     def _get_link_type(self, name):
         if isinstance(self._wn.get_link(name), Pipe):
@@ -71,180 +93,7 @@ class WaterNetworkSimulator(object):
             raise RuntimeError('Node name ' + name + ' was not recognised as a junction, tank, reservoir, or leak.')
 
 
-def _plot_interactive_network(wn, title=None, node_size=8, link_width=2,
-                              figsize=None, round_ndigits=2, filename=None, auto_open=True):
-    """
-    Create an interactive scalable network graphic using networkx and plotly.
-
-    Parameters
-    ----------
-    wn : wntr WaterNetworkModel
-        A WaterNetworkModel object
-
-    title : str, optional
-        Plot title (default = None)
-
-    node_size : int, optional
-        Node size (default = 8)
-
-    link_width : int, optional
-        Link width (default = 1)
-
-    figsize: list, optional
-        Figure size in pixels, default= [700, 450]
-
-    round_ndigits : int, optional
-        Number of digits to round node values used in the label (default = 2)
-
-    filename : string, optional
-        HTML file name (default=None, temp-plot.html)
-    """
-    if figsize is None:
-        figsize = [1000, 700]
-
-    node_attributes = ['_is_isolated', 'head', 'demand']
-    link_attributes = ['status', '_is_isolated', 'flow']
-
-    # Graph
-    G = wn.get_graph()
-
-    open_edges = dict()
-    closed_edges = dict()
-    isolated_edges = dict()
-    for edge_dict in [open_edges, closed_edges, isolated_edges]:
-        edge_dict['x'] = list()
-        edge_dict['y'] = list()
-    for edge in G.edges:
-        x0, y0 = G.nodes[edge[0]]['pos']
-        x1, y1 = G.nodes[edge[1]]['pos']
-        link = wn.get_link(edge[2])
-        if link._is_isolated:
-            edge_dict = isolated_edges
-        elif link.status == LinkStatus.Opened or link.status == LinkStatus.Active:
-            edge_dict = open_edges
-        elif link.status == LinkStatus.Closed:
-            edge_dict = closed_edges
-        else:
-            raise ValueError('Unexpected link status: {0}'.format(str(link.status)))
-        edge_dict['x'] += tuple([x0, x1, None])
-        edge_dict['y'] += tuple([y0, y1, None])
-
-    open_edge_trace = plotly.graph_objs.Scatter(x=open_edges['x'], y=open_edges['y'], mode='lines',
-                                                line=dict(color='Blue', width=link_width))
-    closed_edge_trace = plotly.graph_objs.Scatter(x=closed_edges['x'], y=closed_edges['y'], mode='lines',
-                                                  line=dict(color='Yellow', width=link_width))
-    isolated_edge_trace = plotly.graph_objs.Scatter(x=isolated_edges['x'], y=isolated_edges['y'], mode='lines',
-                                                    line=dict(color='Red', width=link_width))
-
-    edge_name_trace = plotly.graph_objs.Scatter(x=[], y=[], text=[], hoverinfo='text', mode='markers',
-                                                marker=dict(size=1))
-    for edge in G.edges:
-        x0, y0 = G.nodes[edge[0]]['pos']
-        x1, y1 = G.nodes[edge[1]]['pos']
-        link = wn.get_link(edge[2])
-        edge_name_trace['x'] += tuple([0.5 * (x0 + x1)])
-        edge_name_trace['y'] += tuple([0.5 * (y0 + y1)])
-        link_text = str(link.link_type) + ' ' + str(link)
-        for _attr in link_attributes:
-            val = getattr(link, _attr)
-            if type(val) == float:
-                val = round(val, round_ndigits)
-            link_text += '<br />{0}: {1}'.format(_attr, str(val))
-        link_text += '<br />{0}: {1}'.format('x_coord', 0.5 * (x0 + x1))
-        link_text += '<br />{0}: {1}'.format('y_coord', 0.5 * (y0 + y1))
-        edge_name_trace['text'] += tuple([link_text])
-
-    # Create node trace
-    node_trace = plotly.graph_objs.Scatter(x=[], y=[], text=[], hoverinfo='text', mode='markers',
-                                           marker=dict(size=node_size, color='Black', line=dict(width=1)))
-    for node in G.nodes():
-        x, y = G.nodes[node]['pos']
-        node_trace['x'] += tuple([x])
-        node_trace['y'] += tuple([y])
-        _node = wn.get_node(node)
-        node_text = str(_node.node_type) + ' ' + str(_node)
-        for _attr in node_attributes:
-            val = getattr(_node, _attr)
-            if type(val) == float:
-                val = round(val, round_ndigits)
-            node_text += '<br />{0}: {1}'.format(_attr, str(val))
-        try:
-            if hasattr(_node, 'elevation'):
-                node_text += '<br />{0}: {1}'.format('pressure', round(_node.head-_node.elevation, round_ndigits))
-        except:
-            pass
-        node_text += '<br />{0}: {1}'.format('x_coord', x)
-        node_text += '<br />{0}: {1}'.format('y_coord', y)
-        node_trace['text'] += tuple([node_text])
-
-    # Create figure
-    data = [open_edge_trace, closed_edge_trace, isolated_edge_trace, edge_name_trace, node_trace]
-    layout = plotly.graph_objs.Layout(title=title,
-                                      titlefont=dict(size=16),
-                                      showlegend=False,
-                                      width=figsize[0],
-                                      height=figsize[1],
-                                      hovermode='closest',
-                                      margin=dict(b=20, l=5, r=5, t=40),
-                                      xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                      yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
-
-    fig = plotly.graph_objs.Figure(data=data, layout=layout)
-    if filename:
-        plotly.offline.plot(fig, filename=filename, auto_open=auto_open)
-    else:
-        plotly.offline.plot(fig, auto_open=auto_open)
-
-
-def _write_DD_results_to_json_for_diagnostics(wn, res, filename, mode='DD'):
-    d = dict()
-    if mode == 'DD':
-        demand_key = 'expected_demand'
-    elif mode == 'PDD':
-        demand_key = 'demand'
-    else:
-        raise ValueError('Unexpected mode: {0}'.format(mode))
-
-    for t in res.node['head'].index:
-        d[t] = dict()
-        d[t]['head'] = dict()
-        d[t]['source_head'] = dict()
-        d[t][demand_key] = dict()
-        d[t]['flow'] = dict()
-        for col in res.node['head'].columns:
-            node = wn.get_node(col)
-            if node.node_type in {'Tank', 'Reservoir'}:
-                d[t]['source_head'][col] = float(res.node['head'].at[t, col])
-            else:
-                d[t]['head'][col] = float(res.node['head'].at[t, col])
-        for col in res.node['demand'].columns:
-            node = wn.get_node(col)
-            if node.node_type in {'Tank', 'Reservoir'}:
-                pass
-            else:
-                d[t][demand_key][col] = float(res.node['demand'].at[t, col])
-        for col in res.link['flowrate'].columns:
-            d[t]['flow'][col] = float(res.link['flowrate'].at[t, col])
-
-    f = open(filename, 'w')
-    json.dump(d, f)
-    f.close()
-
-
-def _write_status_to_json(wn, res, filename):
-    d = dict()
-
-    for t in res.link['status'].index:
-        d[t] = dict()
-        for col in res.link['status'].columns:
-            d[t][col] = int(res.link['status'].at[t, col])
-
-    f = open(filename, 'w')
-    json.dump(d, f)
-    f.close()
-
-
-class _DiagnosticsOptions(enum.IntEnum):
+class _DiagnosticsOptions(enum.IntEnum): # pragma: no cover
     plot_network = 1
     disable = 2
     run_until_time = 3
@@ -256,11 +105,12 @@ class _DiagnosticsOptions(enum.IntEnum):
     store_var_values_in_network = 9
 
 
-class _Diagnostics(object):
+class _Diagnostics(object): # pragma: no cover
     def __init__(self, wn, model, mode, enable=False):
         self.wn = wn
         self.model = model
-        self.mode = mode
+        # self.mode = mode
+        self.mode = wn.options.hydraulic.demand_model
         self.enabled = enable
         self.time_to_enable = -1
 
@@ -277,7 +127,7 @@ class _Diagnostics(object):
             print('next step: ', next_step)
             selection = self.get_command()
             if selection == _DiagnosticsOptions.plot_network:
-                _plot_interactive_network(self.wn)
+                self._plot_interactive_network(self.wn)
                 self.run(last_step, next_step)
             elif selection == _DiagnosticsOptions.disable:
                 self.enabled = False
@@ -351,13 +201,13 @@ class _Diagnostics(object):
                 print('could not load {0} into the model because {0} is not an attribute of the model'.format(v_name))
                 continue
             v = getattr(self.model, v_name)
-            if type(val) == dict:
+            if isinstance(val, dict):
                 for key, _val in val.items():
                     if key not in v:
                         print('could not load {0}[{1}] into the model because {1} is not an element in model.{0}'.format(v_name, key))
                         continue
                     _v = v[key]
-                    if type(_v) == Var:
+                    if isinstance(_v, Var):
                         _v.value = _val
                     else:
                         if abs(_v.value - _val) > 1e-6:
@@ -366,7 +216,7 @@ class _Diagnostics(object):
                                 print('  from solution file: {0}'.format(_val))
                                 print('  from model: {0}'.format(_v.value))
             else:
-                if type(v) == Var:
+                if isinstance(v, Var):
                     v.value = val
                 else:
                     if abs(v.value - val) > 1e-6:
@@ -446,7 +296,298 @@ class _Diagnostics(object):
         os.system('open link_comparison_' + link_name + '_' + str(t) + '.html')
 
     def store_var_values_in_network(self):
-        wntr.sim.hydraulics.store_results_in_network(self.wn, self.model, self.mode)
+        # self.mode = self._wn.options.hydraulic.demand_model
+        wntr.sim.hydraulics.store_results_in_network(self.wn, self.model) #, self.mode)
+
+    @classmethod
+    def _plot_interactive_network(cls, wn, title=None, node_size=8, link_width=2,
+                                  figsize=None, round_ndigits=3, filename=None, auto_open=True):
+        """
+        Create an interactive scalable network graphic using networkx and plotly.
+
+        Parameters
+        ----------
+        wn : wntr WaterNetworkModel
+            A WaterNetworkModel object
+
+        title : str, optional
+            Plot title (default = None)
+
+        node_size : int, optional
+            Node size (default = 8)
+
+        link_width : int, optional
+            Link width (default = 1)
+
+        figsize: list, optional
+            Figure size in pixels, default= [700, 450]
+
+        round_ndigits : int, optional
+            Number of digits to round node values used in the label (default = 2)
+
+        filename : string, optional
+            HTML file name (default=None, temp-plot.html)
+        """
+        if figsize is None:
+            figsize = [1000, 700]
+
+        node_attributes = ['_is_isolated', 'head', 'demand']
+        link_attributes = ['status', '_is_isolated', 'flow']
+
+        # Graph
+        G = wn.to_graph()
+
+        open_edges = dict()
+        closed_edges = dict()
+        isolated_edges = dict()
+        for edge_dict in [open_edges, closed_edges, isolated_edges]:
+            edge_dict['x'] = list()
+            edge_dict['y'] = list()
+        for edge in G.edges:
+            x0, y0 = G.nodes[edge[0]]['pos']
+            x1, y1 = G.nodes[edge[1]]['pos']
+            link = wn.get_link(edge[2])
+            if link._is_isolated:
+                edge_dict = isolated_edges
+            elif link.status == LinkStatus.Opened or link.status == LinkStatus.Active:
+                edge_dict = open_edges
+            elif link.status == LinkStatus.Closed:
+                edge_dict = closed_edges
+            else:
+                raise ValueError('Unexpected link status: {0}'.format(str(link.status)))
+            edge_dict['x'] += tuple([x0, x1, None])
+            edge_dict['y'] += tuple([y0, y1, None])
+
+        open_edge_trace = plotly.graph_objs.Scatter(x=open_edges['x'], y=open_edges['y'], mode='lines',
+                                                    line=dict(color='Blue', width=link_width))
+        closed_edge_trace = plotly.graph_objs.Scatter(x=closed_edges['x'], y=closed_edges['y'], mode='lines',
+                                                    line=dict(color='Yellow', width=link_width))
+        isolated_edge_trace = plotly.graph_objs.Scatter(x=isolated_edges['x'], y=isolated_edges['y'], mode='lines',
+                                                        line=dict(color='Red', width=link_width))
+
+        edge_name_trace = plotly.graph_objs.Scatter(x=[], y=[], text=[], hoverinfo='text', mode='markers',
+                                                    marker=dict(size=1))
+        for edge in G.edges:
+            x0, y0 = G.nodes[edge[0]]['pos']
+            x1, y1 = G.nodes[edge[1]]['pos']
+            link = wn.get_link(edge[2])
+            edge_name_trace['x'] += tuple([0.5 * (x0 + x1)])
+            edge_name_trace['y'] += tuple([0.5 * (y0 + y1)])
+            link_text = str(link.link_type) + ' ' + str(link)
+            for _attr in link_attributes:
+                val = getattr(link, _attr)
+                if isinstance(val, float):
+                    val = round(val, round_ndigits)
+                link_text += '<br />{0}: {1}'.format(_attr, str(val))
+            link_text += '<br />{0}: {1}'.format('x_coord', 0.5 * (x0 + x1))
+            link_text += '<br />{0}: {1}'.format('y_coord', 0.5 * (y0 + y1))
+            edge_name_trace['text'] += tuple([link_text])
+
+        # Create node trace
+        node_trace = plotly.graph_objs.Scatter(x=[], y=[], text=[], hoverinfo='text', mode='markers',
+                                            marker=dict(size=node_size, color='Black', line=dict(width=1)))
+        for node in G.nodes():
+            x, y = G.nodes[node]['pos']
+            node_trace['x'] += tuple([x])
+            node_trace['y'] += tuple([y])
+            _node = wn.get_node(node)
+            node_text = str(_node.node_type) + ' ' + str(_node)
+            for _attr in node_attributes:
+                val = getattr(_node, _attr)
+                if isinstance(val, float):
+                    val = round(val, round_ndigits)
+                node_text += '<br />{0}: {1}'.format(_attr, str(val))
+            try:
+                if hasattr(_node, 'elevation'):
+                    node_text += '<br />{0}: {1}'.format('pressure', round(_node.head-_node.elevation, round_ndigits))
+            except:
+                pass
+            node_text += '<br />{0}: {1}'.format('x_coord', x)
+            node_text += '<br />{0}: {1}'.format('y_coord', y)
+            node_trace['text'] += tuple([node_text])
+
+        # Create figure
+        data = [open_edge_trace, closed_edge_trace, isolated_edge_trace, edge_name_trace, node_trace]
+        layout = plotly.graph_objs.Layout(title=title,
+                                        titlefont=dict(size=16),
+                                        showlegend=False,
+                                        width=figsize[0],
+                                        height=figsize[1],
+                                        hovermode='closest',
+                                        margin=dict(b=20, l=5, r=5, t=40),
+                                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+
+        fig = plotly.graph_objs.Figure(data=data, layout=layout)
+        if filename:
+            plotly.offline.plot(fig, filename=filename, auto_open=auto_open)
+        else:
+            plotly.offline.plot(fig, filename='network_state_at_' + str(int(wn.sim_time)) + '.html', auto_open=auto_open)
+
+    @classmethod
+    def _write_DD_results_to_json_for_diagnostics(cls, wn, res, filename):
+        d = dict()
+        mode = wn.options.hydraulic.demand_model
+        if mode in ['DD','DDA']:
+            demand_key = 'expected_demand'
+        elif mode in ['PDD','PDA']:
+            demand_key = 'demand'
+        else:
+            raise ValueError('Unexpected mode: {0}'.format(mode))
+
+        for t in res.node['head'].index:
+            d[t] = dict()
+            d[t]['head'] = dict()
+            d[t]['source_head'] = dict()
+            d[t][demand_key] = dict()
+            d[t]['flow'] = dict()
+            for col in res.node['head'].columns:
+                node = wn.get_node(col)
+                if node.node_type in {'Tank', 'Reservoir'}:
+                    d[t]['source_head'][col] = float(res.node['head'].at[t, col])
+                else:
+                    d[t]['head'][col] = float(res.node['head'].at[t, col])
+            for col in res.node['demand'].columns:
+                node = wn.get_node(col)
+                if node.node_type in {'Tank', 'Reservoir'}:
+                    pass
+                else:
+                    d[t][demand_key][col] = float(res.node['demand'].at[t, col])
+            for col in res.link['flowrate'].columns:
+                d[t]['flow'][col] = float(res.link['flowrate'].at[t, col])
+
+        f = open(filename, 'w')
+        json.dump(d, f)
+        f.close()
+
+    @classmethod
+    def _write_status_to_json(cls, wn, res, filename):
+        d = dict()
+
+        for t in res.link['status'].index:
+            d[t] = dict()
+            for col in res.link['status'].columns:
+                d[t][col] = int(res.link['status'].at[t, col])
+
+        f = open(filename, 'w')
+        json.dump(d, f)
+        f.close()
+
+
+def _check_upstream_sources(graph, wn, valve):
+    if valve.status != LinkStatus.Active:
+        return False
+
+    graph.remove_edge(valve.start_node, valve.end_node, valve)
+    res = False
+
+    upstream_nodes = nx.algorithms.descendants(graph, valve.start_node)
+    has_upstream_source = False
+    for tank_name, tank in wn.tanks():
+        if tank in upstream_nodes:
+            has_upstream_source = True
+            break
+    for r_name, reservoir in wn.reservoirs():
+        if reservoir in upstream_nodes:
+            has_upstream_source = True
+            break
+    if not has_upstream_source:
+        res = True
+
+    graph.add_edge(valve.start_node, valve.end_node, valve)
+    return res
+
+
+def _check_downstream_sources(graph, wn, valve):
+    if valve.status != LinkStatus.Active:
+        return False
+
+    graph.remove_edge(valve.start_node, valve.end_node, valve)
+    res = False
+
+    downstream_nodes = nx.algorithms.descendants(graph, valve.end_node)
+    has_downstream_source = False
+    for tank_name, tank in wn.tanks():
+        if tank in downstream_nodes:
+            has_downstream_source = True
+            break
+    for r_name, reservoir in wn.reservoirs():
+        if reservoir in downstream_nodes:
+            has_downstream_source = True
+            break
+    if not has_downstream_source:
+        res = True
+
+    graph.add_edge(valve.start_node, valve.end_node, valve)
+    return res
+
+
+class _ValveSourceChecker(Observer):
+    def __init__(self, wn):
+        self.wn = wn
+        self.graph = nx.MultiGraph()
+        self.graph.add_nodes_from([n for n_name, n in wn.nodes()])
+        self.graph.add_edges_from([(l.start_node, l.end_node, l) for l_name, l in wn.links() if l.status != LinkStatus.Closed])
+        self._previous_values = dict()
+        self._values_at_last_compute = dict()
+        self._needs_compute = True
+        self._cached_results = dict()
+        self._first_compute = True
+
+    def update(self, action: BaseControlAction):
+        obj, attr = action.target()
+        val = getattr(obj, attr)
+        if val != self._previous_values[(obj, attr)]:
+            self._needs_compute = True
+            if val == wntr.network.LinkStatus.Closed:
+                self.graph.remove_edge(obj.start_node, obj.end_node, obj)
+            else:
+                self.graph.add_edge(obj.start_node, obj.end_node, obj)
+
+        self._previous_values[(obj, attr)] = val
+
+    def register_control(self, control: ControlBase):
+        for action in control.actions():
+            obj, attr = action.target()
+            if isinstance(obj, Link) and attr == 'status':
+                action.subscribe(self)
+                self._previous_values[(obj, attr)] = getattr(obj, attr)
+
+    def _cache_values_at_compute(self):
+        for key, val in self._previous_values.items():
+            self._values_at_last_compute[key] = val
+
+    def _changes_since_compute(self):
+        for k, v in self._values_at_last_compute.items():
+            if v != self._previous_values[k]:
+                return True
+        return False
+
+    def _compute(self):
+        if self._first_compute or (self._needs_compute and self._changes_since_compute()):
+            self._first_compute = False
+            self._cache_values_at_compute()
+            for valve_name, valve in self.wn.prvs():
+                self._cached_results[valve] = _check_upstream_sources(self.graph, self.wn, valve)
+
+            for valve_name, valve in self.wn.psvs():
+                self._cached_results[valve] = _check_downstream_sources(self.graph, self.wn, valve)
+
+            for valve_name, valve in self.wn.fcvs():
+                upstream_res = _check_upstream_sources(self.graph, self.wn, valve)
+                downstream_res = _check_downstream_sources(self.graph, self.wn, valve)
+                self._cached_results[valve] = upstream_res or downstream_res
+        self._needs_compute = False
+
+    def should_valve_be_opened(self, valve: Valve):
+        """
+        This is a function to be used with a FunctionCondition to ensure PRVs are connected to at least one upstream
+        source, PSVs are connected to at least one downstream source, and FCVs are connected to at least one
+        upstream source and at least one downstream source. If these conditions are not satisifed, the valve
+        should be opened (the internal status).
+        """
+        self._compute()
+        return self._cached_results[valve]
 
 
 class WNTRSimulator(WaterNetworkSimulator):
@@ -459,14 +600,16 @@ class WNTRSimulator(WaterNetworkSimulator):
     wn : WaterNetworkModel object
         Water network model
 
-    mode: string (optional)
-        Specifies whether the simulation will be demand-driven (DD) or
-        pressure dependent demand (PDD), default = DD
+
+    .. note::
+    
+        The mode parameter has been deprecated. Please set the mode using Options.hydraulic.demand_model
+
     """
 
-    def __init__(self, wn, mode='DD'):
+    def __init__(self, wn):
 
-        super(WNTRSimulator, self).__init__(wn, mode)
+        super(WNTRSimulator, self).__init__(wn)
 
         # attributes needed isolated junctions/links
         self._prev_isolated_junctions = OrderedSet()
@@ -480,10 +623,11 @@ class WNTRSimulator(WaterNetworkSimulator):
         self._source_ids = None
 
         # attributes needed for controls
-        self._presolve_controls = ControlManager()
-        self._rules = ControlManager()
-        self._postsolve_controls = ControlManager()
-        self._feasibility_controls = ControlManager()
+        self._presolve_controls = ControlChecker()
+        self._rules = ControlChecker()
+        self._postsolve_controls = ControlChecker()
+        self._feasibility_controls = ControlChecker()
+        self._change_tracker = ControlChangeTracker()
         self._model_updater = None
         self._rule_iter = 0
 
@@ -493,11 +637,16 @@ class WNTRSimulator(WaterNetworkSimulator):
         self._backup_solver = None
         self._solver_options = dict()
         self._backup_solver_options = dict()
-        self._convergence_error = True
+        self._convergence_error = False
 
         # other attributes
         self._hydraulic_timestep = None
         self._report_timestep = None
+
+        self._Htol = 0.0001524  # Head tolerance in meters.
+        self._Qtol = 2.83168e-6  # Flow tolerance in m^3/s.
+
+        self._valve_source_checker: Optional[_ValveSourceChecker] = None
 
         long_size = get_long_size()
         if long_size == 4:
@@ -515,12 +664,12 @@ class WNTRSimulator(WaterNetworkSimulator):
         m = int(s/60)
         s -= m*60
         s = int(s)
-        return str(h)+':'+str(m)+':'+str(s)
+        return '{:02}:{:02}:{:02}'.format(h, m, s)
 
     def _setup_sim_options(self, solver, backup_solver, solver_options, backup_solver_options, convergence_error):
         self._report_timestep = self._wn.options.time.report_timestep
         self._hydraulic_timestep = self._wn.options.time.hydraulic_timestep
-        if type(self._report_timestep) is str:
+        if isinstance(self._report_timestep, str):
             if self._report_timestep.upper() != 'ALL':
                 raise ValueError('report timestep must be either an integer number of seconds or "ALL".')
         else:
@@ -566,11 +715,271 @@ class WNTRSimulator(WaterNetworkSimulator):
 
         self._convergence_error = convergence_error
 
+    def _get_all_tank_controls(self):
+
+        tank_controls = []
+
+        for tank_name, tank in self._wn.nodes(Tank):
+
+            # add the tank controls
+            all_links = self._wn.get_links_for_node(tank_name, 'ALL')
+
+            # First take care of the min level
+            min_head = tank.min_level + tank.elevation
+            for link_name in all_links:
+                link = self._wn.get_link(link_name)
+                link_has_cv = False  # flow leaving the tank (start node = tank)
+                if isinstance(link, Pipe):
+                    if link.check_valve:
+                        if link.end_node_name == tank_name:
+                            continue
+                        else:
+                            link_has_cv = True
+                elif isinstance(link, Pump):
+                    if link.end_node_name == tank_name:
+                        continue
+                    else:
+                        link_has_cv = True
+
+                close_control_action = _InternalControlAction(link, '_internal_status', LinkStatus.Closed, 'status')
+                open_control_action = _InternalControlAction(link, '_internal_status', LinkStatus.Open, 'status')
+
+                close_condition = ValueCondition(tank, 'head', Comparison.le, min_head)
+                close_control_1 = Control(condition=close_condition, then_action=close_control_action,
+                                          priority=ControlPriority.medium)
+                close_control_1._control_type = _ControlType.pre_and_postsolve
+                tank_controls.append(close_control_1)
+
+                if not link_has_cv:
+                    open_condition_1 = ValueCondition(tank, 'head', Comparison.ge, min_head + self._Htol)
+                    open_control_1 = Control(condition=open_condition_1, then_action=open_control_action,
+                                             priority=ControlPriority.low)
+                    open_control_1._control_type = _ControlType.postsolve
+                    tank_controls.append(open_control_1)
+
+                    if link.start_node is tank:
+                        other_node = link.end_node
+                    elif link.end_node is tank:
+                        other_node = link.start_node
+                    else:
+                        raise RuntimeError('Tank is neither the start node nore the end node.')
+                    open_condition_2a = RelativeCondition(tank, 'head', Comparison.le, other_node, 'head')
+                    open_condition_2b = ValueCondition(tank, 'head', Comparison.le, min_head + self._Htol)
+                    open_condition_2 = AndCondition(open_condition_2a, open_condition_2b)
+                    open_control_2 = Control(condition=open_condition_2, then_action=open_control_action,
+                                             priority=ControlPriority.high)
+                    open_control_2._control_type = _ControlType.postsolve
+                    tank_controls.append(open_control_2)
+
+            # Now take care of the max level
+            max_head = tank.max_level + tank.elevation
+            for link_name in all_links:
+                link = self._wn.get_link(link_name)
+                link_has_cv = False  # flow entering the tank (end node = tank)
+                if isinstance(link, Pipe):
+                    if link.check_valve:
+                        if link.start_node_name == tank_name:
+                            continue
+                        else:
+                            link_has_cv = True
+                if isinstance(link, Pump):
+                    if link.start_node_name == tank_name:
+                        continue
+                    else:
+                        link_has_cv = True
+
+                close_control_action = _InternalControlAction(link, '_internal_status', LinkStatus.Closed, 'status')
+                open_control_action = _InternalControlAction(link, '_internal_status', LinkStatus.Open, 'status')
+
+                close_condition = ValueCondition(tank, 'head', Comparison.ge, max_head)
+                close_control = Control(condition=close_condition, then_action=close_control_action,
+                                        priority=ControlPriority.medium)
+                close_control._control_type = _ControlType.pre_and_postsolve
+                tank_controls.append(close_control)
+
+                if not link_has_cv:
+                    open_condition_1 = ValueCondition(tank, 'head', Comparison.le, max_head - self._Htol)
+                    open_control_1 = Control(condition=open_condition_1, then_action=open_control_action,
+                                             priority=ControlPriority.low)
+                    open_control_1._control_type = _ControlType.postsolve
+                    tank_controls.append(open_control_1)
+
+                    if link.start_node is tank:
+                        other_node = link.end_node
+                    elif link.end_node is tank:
+                        other_node = link.start_node
+                    else:
+                        raise RuntimeError('Tank is neither the start node nore the end node.')
+                    open_condition_2a = RelativeCondition(tank, 'head', Comparison.ge, other_node, 'head')
+                    open_condition_2b = ValueCondition(tank, 'head', Comparison.ge, max_head - self._Htol)
+                    open_condition_2 = AndCondition(open_condition_2a, open_condition_2b)
+                    open_control_2 = Control(condition=open_condition_2, then_action=open_control_action,
+                                             priority=ControlPriority.high)
+                    open_control_2._control_type = _ControlType.postsolve
+                    tank_controls.append(open_control_2)
+
+        return tank_controls
+
+    def _get_cv_controls(self):
+        cv_controls = []
+        for pipe_name, pipe in self._wn.pipes():
+            if pipe.check_valve:
+                pipe = self._wn.get_link(pipe_name)
+                open_condition = _OpenCVCondition(self._wn, pipe)
+                close_condition = _CloseCVCondition(self._wn, pipe)
+                open_action = _InternalControlAction(pipe, '_internal_status', LinkStatus.Open, 'status')
+                close_action = _InternalControlAction(pipe, '_internal_status', LinkStatus.Closed, 'status')
+                open_control = Control(condition=open_condition, then_action=open_action, priority=ControlPriority.very_low)
+                close_control = Control(condition=close_condition, then_action=close_action,
+                                        priority=ControlPriority.very_high)
+                open_control._control_type = _ControlType.postsolve
+                close_control._control_type = _ControlType.postsolve
+                cv_controls.append(open_control)
+                cv_controls.append(close_control)
+
+        return cv_controls
+
+    def _get_pump_controls(self):
+        pump_controls = []
+
+        for control_name, control in self._wn.controls():
+            for action in control.actions():
+                target_obj, target_attr = action.target()
+                if target_attr == 'base_speed':
+                    if not isinstance(target_obj, Pump):
+                        raise ValueError('base_speed can only be changed on pumps; ' + str(control))
+                    new_status = LinkStatus.Open
+                    new_action = ControlAction(target_obj, 'status', new_status)
+                    condition = control.condition
+                    new_control = type(control)(condition, new_action, priority=control.priority)
+                    pump_controls.append(new_control)
+
+        for pump_name, pump in self._wn.pumps():
+            close_control_action = _InternalControlAction(pump, '_internal_status', LinkStatus.Closed, 'status')
+            open_control_action = _InternalControlAction(pump, '_internal_status', LinkStatus.Open, 'status')
+
+            if pump.pump_type == 'HEAD':
+                close_condition = _CloseHeadPumpCondition(self._wn, pump)
+                open_condition = _OpenHeadPumpCondition(self._wn, pump)
+            elif pump.pump_type == 'POWER':
+                close_condition = _ClosePowerPumpCondition(self._wn, pump)
+                open_condition = _OpenPowerPumpCondition(self._wn, pump)
+            else:
+                raise ValueError('Unrecognized pump pump_type: {0}'.format(pump.pump_type))
+
+            close_control = Control(condition=close_condition, then_action=close_control_action,
+                                    priority=ControlPriority.very_high)
+            open_control = Control(condition=open_condition, then_action=open_control_action,
+                                   priority=ControlPriority.very_low)
+
+            close_control._control_type = _ControlType.postsolve
+            open_control._control_type = _ControlType.postsolve
+
+            pump_controls.append(close_control)
+            pump_controls.append(open_control)
+
+        return pump_controls
+
+    def _get_valve_controls(self):
+        valve_controls = []
+
+        for control_name, control in self._wn.controls():
+            for action in control.actions():
+                target_obj, target_attr = action.target()
+                if target_attr == 'setting':
+                    if isinstance(target_obj, Valve):
+                        new_status = LinkStatus.Active
+                    elif isinstance(target_obj, Pump):
+                        raise ValueError('Cannot control settings on pumps; use "base_speed"; ' + str(control))
+                    else:
+                        raise ValueError('Settings can only be changed on valves: ' + str(control))
+                    new_action = ControlAction(target_obj, 'status', new_status)
+                    condition = control.condition
+                    new_control = type(control)(condition, new_action, priority=control.priority)
+                    valve_controls.append(new_control)
+
+        for valve_name, valve in self._wn.valves():
+
+            if valve.valve_type == 'PRV':
+                close_condition = _ClosePRVCondition(self._wn, valve)
+                open_condition = _OpenPRVCondition(self._wn, valve)
+                active_condition = _ActivePRVCondition(self._wn, valve)
+                close_action = _InternalControlAction(valve, '_internal_status', LinkStatus.Closed, 'status')
+                open_action = _InternalControlAction(valve, '_internal_status', LinkStatus.Open, 'status')
+                active_action = _InternalControlAction(valve, '_internal_status', LinkStatus.Active, 'status')
+                close_control = Control(condition=close_condition, then_action=close_action,
+                                        priority=ControlPriority.very_high)
+                open_control = Control(condition=open_condition, then_action=open_action,
+                                       priority=ControlPriority.very_low)
+                active_control = Control(condition=active_condition, then_action=active_action,
+                                         priority=ControlPriority.very_low)
+                close_control._control_type = _ControlType.postsolve
+                open_control._control_type = _ControlType.postsolve
+                active_control._control_type = _ControlType.postsolve
+                valve_controls.append(close_control)
+                valve_controls.append(open_control)
+                valve_controls.append(active_control)
+
+            elif valve.valve_type == 'PSV':
+                close_condition = _ClosePSVCondition(self._wn, valve)
+                open_condition = _OpenPSVCondition(self._wn, valve)
+                active_condition = _ActivePSVCondition(self._wn, valve)
+                close_action = _InternalControlAction(valve, '_internal_status', LinkStatus.Closed, 'status')
+                open_action = _InternalControlAction(valve, '_internal_status', LinkStatus.Open, 'status')
+                active_action = _InternalControlAction(valve, '_internal_status', LinkStatus.Active, 'status')
+                close_control = Control(condition=close_condition, then_action=close_action,
+                                        priority=ControlPriority.very_high)
+                open_control = Control(condition=open_condition, then_action=open_action,
+                                       priority=ControlPriority.very_low)
+                active_control = Control(condition=active_condition, then_action=active_action,
+                                         priority=ControlPriority.very_low)
+                close_control._control_type = _ControlType.postsolve
+                open_control._control_type = _ControlType.postsolve
+                active_control._control_type = _ControlType.postsolve
+                valve_controls.append(close_control)
+                valve_controls.append(open_control)
+                valve_controls.append(active_control)
+
+            elif valve.valve_type == 'FCV':
+                open_condition = _OpenFCVCondition(self._wn, valve)
+                active_condition = _ActiveFCVCondition(self._wn, valve)
+                open_action = _InternalControlAction(valve, '_internal_status', LinkStatus.Open, 'status')
+                active_action = _InternalControlAction(valve, '_internal_status', LinkStatus.Active, 'status')
+                open_control = Control(condition=open_condition, then_action=open_action,
+                                       priority=ControlPriority.very_low)
+                active_control = Control(condition=active_condition, then_action=active_action,
+                                         priority=ControlPriority.very_low)
+                open_control._control_type = _ControlType.postsolve
+                active_control._control_type = _ControlType.postsolve
+                valve_controls.append(open_control)
+                valve_controls.append(active_control)
+
+            if valve.valve_type in {'PSV', 'PRV', 'FCV'}:
+                active_condition = ValueCondition(source_obj=valve, source_attr='status', relation=Comparison.eq,
+                                                  threshold=LinkStatus.Active)
+                upstream_source_condition = FunctionCondition(self._valve_source_checker.should_valve_be_opened,
+                                                              func_kwargs={'valve': valve},
+                                                              requires=[valve])
+                condition = AndCondition(cond1=active_condition, cond2=upstream_source_condition)
+                action = _InternalControlAction(valve, '_internal_status', LinkStatus.Open, 'status')
+                control = Control(condition=condition, then_action=action, priority=ControlPriority.very_high)
+                control._control_type = _ControlType.feasibility
+                valve_controls.append(control)
+
+        return valve_controls
+
+    def _register_controls_with_observers(self):
+        for mgr in [self._presolve_controls, self._postsolve_controls, self._rules, self._feasibility_controls]:
+            for control in mgr._controls:
+                self._valve_source_checker.register_control(control)
+                self._change_tracker.register_control(control)
+
     def _get_control_managers(self):
-        self._presolve_controls = ControlManager()
-        self._postsolve_controls = ControlManager()
-        self._rules = ControlManager()
-        self._feasibility_controls = ControlManager()
+        self._presolve_controls = ControlChecker()
+        self._postsolve_controls = ControlChecker()
+        self._rules = ControlChecker()
+        self._feasibility_controls = ControlChecker()
+        self._change_tracker = ControlChangeTracker()
 
         def categorize_control(control):
             if control.epanet_control_type in {_ControlType.presolve, _ControlType.pre_and_postsolve}:
@@ -584,13 +993,13 @@ class WNTRSimulator(WaterNetworkSimulator):
 
         for c_name, c in self._wn.controls():
             categorize_control(c)
-        for c in self._wn._get_all_tank_controls():
+        for c in self._get_all_tank_controls():
             categorize_control(c)
-        for c in self._wn._get_cv_controls():
+        for c in self._get_cv_controls():
             categorize_control(c)
-        for c in self._wn._get_pump_controls():
+        for c in self._get_pump_controls():
             categorize_control(c)
-        for c in self._wn._get_valve_controls():
+        for c in self._get_valve_controls():
             categorize_control(c)
 
         if logger.getEffectiveLevel() <= 1:
@@ -622,9 +1031,7 @@ class WNTRSimulator(WaterNetworkSimulator):
                wn.sim_time will be adjusted to the appropriate rule timestep.
         2) Activate the appropriate controls
         """
-
-        self._presolve_controls.reset()
-        self._rules.reset()
+        self._change_tracker.set_reference_point('presolve')
 
         # check which presolve controls need to be activated before the next hydraulic timestep
         presolve_controls_to_run = self._presolve_controls.check()
@@ -660,7 +1067,7 @@ class WNTRSimulator(WaterNetworkSimulator):
                     if logger.getEffectiveLevel() <= 1:
                         logger.log(1, '\tactivating rule {0}'.format(rule))
                     rule.run_control_action()
-                if self._rules.changes_made():
+                if self._change_tracker.changes_made(ref_point='presolve'):
                     # If changes were made, then we found the next timestep; break
                     break
                 # if no changes were made, then set the wn.sim_time back
@@ -688,7 +1095,7 @@ class WNTRSimulator(WaterNetworkSimulator):
                                 presolve_controls_to_run[cnt][1]))
                         presolve_controls_to_run[cnt][0].run_control_action()
                         cnt += 1
-                    if self._presolve_controls.changes_made():
+                    if self._change_tracker.changes_made(ref_point='presolve'):
                         # changes were actually made; we found the next timestep; update wn.sim_time and break
                         self._wn.sim_time -= backtrack
                         break
@@ -721,7 +1128,7 @@ class WNTRSimulator(WaterNetworkSimulator):
                                 presolve_controls_to_run[cnt][0], presolve_controls_to_run[cnt][1]))
                         presolve_controls_to_run[cnt][0].run_control_action()
                         cnt += 1
-                    if self._presolve_controls.changes_made() or self._rules.changes_made():
+                    if self._change_tracker.changes_made(ref_point='presolve'):
                         break
                     if logger.getEffectiveLevel() <= 1:
                         logger.log(1,
@@ -741,34 +1148,33 @@ class WNTRSimulator(WaterNetworkSimulator):
                         if logger.getEffectiveLevel() <= 1:
                             logger.log(1, '\tactivating rule {0}'.format(rule))
                         rule.run_control_action()
-                    if self._rules.changes_made():
+                    if self._change_tracker.changes_made(ref_point='presolve'):
                         break
                     if logger.getEffectiveLevel() <= 1:
                         logger.log(1, 'no changes made by rules at rule timestep {0}'.format(
                             (self._rule_iter - 1) * self._wn.options.time.rule_timestep))
                     self._wn.sim_time = old_time
         if logger.getEffectiveLevel() <= logging.DEBUG:
-            logger.debug('changes made by rules: ')
-            for obj, attr in self._rules.get_changes():
+            logger.debug('changes made by presolve controls and/or rules: ')
+            for obj, attr in self._change_tracker.get_changes(ref_point='presolve'):
                 logger.debug('\t{0}.{1} changed to {2}'.format(obj, attr, getattr(obj, attr)))
-            logger.debug('changes made by presolve controls:')
-            for obj, attr in self._presolve_controls.get_changes():
-                logger.debug('\t{0}.{1} changed to {2}'.format(obj, attr, getattr(obj, attr)))
+        self._change_tracker.remove_reference_point(key='presolve')
 
     def _run_feasibility_controls(self):
-        self._feasibility_controls.reset()
+        self._change_tracker.set_reference_point('feasibility')
         feasibility_controls_to_run = self._feasibility_controls.check()
         feasibility_controls_to_run.sort(key=lambda i: i[0]._priority)
         for c, b in feasibility_controls_to_run:
             assert b == 0
             c.run_control_action()
         logger.debug('changes made by feasibility controls:')
-        for obj, attr in self._feasibility_controls.get_changes():
+        for obj, attr in self._change_tracker.get_changes(ref_point='feasibility'):
             logger.debug('\t{0}.{1} changed to {2}'.format(obj, attr, getattr(obj, attr)))
+        self._change_tracker.remove_reference_point(key='feasibility')
 
     def _run_postsolve_controls(self):
+        self._change_tracker.set_reference_point('postsolve')
         logger.debug('checking postsolve controls')
-        self._postsolve_controls.reset()
         postsolve_controls_to_run = self._postsolve_controls.check()
         postsolve_controls_to_run.sort(key=lambda i: i[0]._priority)
         for control, unused in postsolve_controls_to_run:
@@ -777,37 +1183,31 @@ class WNTRSimulator(WaterNetworkSimulator):
             control.run_control_action()
         if logger.getEffectiveLevel() <= logging.DEBUG:
             logger.debug('postsolve controls made changes:')
-            for obj, attr in self._postsolve_controls.get_changes():
+            for obj, attr in self._change_tracker.get_changes(ref_point='postsolve'):
                 logger.debug('\t{0}.{1} changed to {2}'.format(obj, attr, getattr(obj, attr)))
+        self._change_tracker.remove_reference_point('postsolve')
 
     def run_sim(self, solver=NewtonSolver, backup_solver=None, solver_options=None,
-                backup_solver_options=None, convergence_error=True, HW_approx='default',
+                backup_solver_options=None, convergence_error=False, HW_approx='default',
                 diagnostics=False):
+
         """
         Run an extended period simulation (hydraulics only).
 
         Parameters
         ----------
         solver: object
-            wntr.sim.solvers.NewtonSolver or Scipy solver
+            :py:class:`~wntr.sim.solvers.NewtonSolver` or Scipy solver
         backup_solver: object
-            wntr.sim.solvers.NewtonSolver or Scipy solver
+            :py:class:`~wntr.sim.solvers.NewtonSolver` or Scipy solver
         solver_options: dict
-            Solver options are specified using the following dictionary keys:
-
-            * MAXITER: the maximum number of iterations for each hydraulic solve (each timestep and trial) (default = 100)
-            * TOL: tolerance for the hydraulic equations (default = 1e-6)
-            * BT_RHO: the fraction by which the step length is reduced at each iteration of the line search (default = 0.5)
-            * BT_MAXITER: the maximum number of iterations for each line search (default = 20)
-            * BACKTRACKING: whether or not to use a line search (default = True)
-            * BT_START_ITER: the newton iteration at which a line search should start being used (default = 2)
-            * THREADS: the number of threads to use in constraint and jacobian computations
+            See :py:class:`~wntr.sim.solvers.NewtonSolver` for possible options
         backup_solver_options: dict
         convergence_error: bool (optional)
             If convergence_error is True, an error will be raised if the
-            simulation does not converge. If convergence_error is False,
-            a warning will be issued and results.error_code will be set to 2
-            if the simulation does not converge.  Default = True.
+            simulation does not converge. If convergence_error is False, partial results are returned, 
+            a warning will be issued, and results.error_code will be set to 0
+            if the simulation does not converge.  Default = False.
         HW_approx: str
             Specifies which Hazen-Williams headloss approximation to use. Options are 'default' and 'piecewise'. Please
             see the WNTR documentation on hydraulics for details.
@@ -815,7 +1215,8 @@ class WNTRSimulator(WaterNetworkSimulator):
             If True, then run with diagnostics on
         """
         logger.debug('creating hydraulic model')
-        self._model, self._model_updater = wntr.sim.hydraulics.create_hydraulic_model(wn=self._wn, mode=self.mode, HW_approx=HW_approx)
+        self.mode = self._wn.options.hydraulic.demand_model
+        self._model, self._model_updater = wntr.sim.hydraulics.create_hydraulic_model(wn=self._wn, HW_approx=HW_approx)
 
         if diagnostics:
             diagnostics = _Diagnostics(self._wn, self._model, self.mode, enable=True)
@@ -825,7 +1226,9 @@ class WNTRSimulator(WaterNetworkSimulator):
         self._setup_sim_options(solver=solver, backup_solver=backup_solver, solver_options=solver_options,
                                 backup_solver_options=backup_solver_options, convergence_error=convergence_error)
 
+        self._valve_source_checker = _ValveSourceChecker(self._wn)
         self._get_control_managers()
+        self._register_controls_with_observers()
 
         node_res, link_res = wntr.sim.hydraulics.initialize_results_dict(self._wn)
         results = wntr.sim.results.SimulationResults()
@@ -834,13 +1237,15 @@ class WNTRSimulator(WaterNetworkSimulator):
         results.network_name = self._wn.name
 
         self._initialize_internal_graph()
+        self._change_tracker.set_reference_point('graph')
+        self._change_tracker.set_reference_point('model')
 
         if self._wn.sim_time == 0:
             first_step = True
         else:
             first_step = False
         trial = -1
-        max_trials = self._wn.options.solver.trials
+        max_trials = self._wn.options.hydraulic.trials
         resolve = False
         self._rule_iter = 0  # this is used to determine the rule timestep
 
@@ -873,9 +1278,7 @@ class WNTRSimulator(WaterNetworkSimulator):
             num_isolated_junctions, num_isolated_links = self._get_isolated_junctions_and_links()
             if not first_step and not resolve:
                 wntr.sim.hydraulics.update_tank_heads(self._wn)
-            wntr.sim.hydraulics.update_model_for_controls(self._model, self._wn, self._model_updater, self._presolve_controls)
-            wntr.sim.hydraulics.update_model_for_controls(self._model, self._wn, self._model_updater, self._rules)
-            wntr.sim.hydraulics.update_model_for_controls(self._model, self._wn, self._model_updater, self._feasibility_controls)
+            wntr.sim.hydraulics.update_model_for_controls(self._model, self._wn, self._model_updater, self._change_tracker)
             wntr.sim.models.param.source_head_param(self._model, self._wn)
             wntr.sim.models.param.expected_demand_param(self._model, self._wn)
 
@@ -886,10 +1289,10 @@ class WNTRSimulator(WaterNetworkSimulator):
                 solver_status, mesg, iter_count = _solver_helper(self._model, self._backup_solver, self._backup_solver_options)
             if solver_status == 0:
                 if self._convergence_error:
-                    logger.error('Simulation did not converge. ' + mesg)
-                    raise RuntimeError('Simulation did not converge. ' + mesg)
-                warnings.warn('Simulation did not converge. ' + mesg)
-                logger.warning('Simulation did not converge at time ' + str(self._get_time()) + '. ' + mesg)
+                    logger.error('Simulation did not converge at time ' + self._get_time() + '. ' + mesg) 
+                    raise RuntimeError('Simulation did not converge at time ' + self._get_time() + '. ' + mesg)
+                warnings.warn('Simulation did not converge at time ' + self._get_time() + '. ' + mesg)
+                logger.warning('Simulation did not converge at time ' + self._get_time() + '. ' + mesg)
                 results.error_code = wntr.sim.results.ResultsStatus.error
                 diagnostics.run(last_step='solve', next_step='break')
                 break
@@ -898,24 +1301,25 @@ class WNTRSimulator(WaterNetworkSimulator):
 
             # Enter results in network and update previous inputs
             logger.debug('storing results in network')
-            wntr.sim.hydraulics.store_results_in_network(self._wn, self._model, mode=self.mode)
+            wntr.sim.hydraulics.store_results_in_network(self._wn, self._model)
 
             diagnostics.run(last_step='solve and store results in network', next_step='postsolve controls')
 
             self._run_postsolve_controls()
-            if self._postsolve_controls.changes_made():
+            self._run_feasibility_controls()
+            if self._change_tracker.changes_made(ref_point='graph'):
                 resolve = True
                 self._update_internal_graph()
-                wntr.sim.hydraulics.update_model_for_controls(self._model, self._wn, self._model_updater, self._postsolve_controls)
+                wntr.sim.hydraulics.update_model_for_controls(self._model, self._wn, self._model_updater, self._change_tracker)
                 diagnostics.run(last_step='postsolve controls and model updates', next_step='solve next trial')
                 trial += 1
                 if trial > max_trials:
                     if convergence_error:
-                        logger.error('Exceeded maximum number of trials.')
-                        raise RuntimeError('Exceeded maximum number of trials.')
+                        logger.error('Exceeded maximum number of trials at time ' + self._get_time() + '. ') 
+                        raise RuntimeError('Exceeded maximum number of trials at time ' + self._get_time() + '. ' ) 
                     results.error_code = wntr.sim.results.ResultsStatus.error
-                    warnings.warn('Exceeded maximum number of trials.')
-                    logger.warning('Exceeded maximum number of trials at time %s', self._get_time())
+                    warnings.warn('Exceeded maximum number of trials at time ' + self._get_time() + '. ') 
+                    logger.warning('Exceeded maximum number of trials at time ' + self._get_time() + '. ' ) 
                     break
                 continue
 
@@ -924,11 +1328,15 @@ class WNTRSimulator(WaterNetworkSimulator):
             logger.debug('no changes made by postsolve controls; moving to next timestep')
 
             resolve = False
-            if type(self._report_timestep) == float or type(self._report_timestep) == int:
+            if isinstance(self._report_timestep, (float, int)):
                 if self._wn.sim_time % self._report_timestep == 0:
                     wntr.sim.hydraulics.save_results(self._wn, node_res, link_res)
                     if len(results.time) > 0 and int(self._wn.sim_time) == results.time[-1]:
-                        raise RuntimeError('Simulation already solved this timestep')
+                        if int(self._wn.sim_time) != self._wn.sim_time:
+                            raise RuntimeError('Time steps increments smaller than 1 second are forbidden.'+
+                                               ' Keep time steps as an integer number of seconds.')
+                        else:
+                            raise RuntimeError('Simulation already solved this timestep')
                     results.time.append(int(self._wn.sim_time))
             elif self._report_timestep.upper() == 'ALL':
                 wntr.sim.hydraulics.save_results(self._wn, node_res, link_res)
@@ -945,6 +1353,7 @@ class WNTRSimulator(WaterNetworkSimulator):
                 break
 
         wntr.sim.hydraulics.get_results(self._wn, results, node_res, link_res)
+        
         return results
 
     def _initialize_name_id_maps(self):
@@ -978,7 +1387,7 @@ class WNTRSimulator(WaterNetworkSimulator):
             cols.append(to_node_id)
             rows.append(to_node_id)
             cols.append(from_node_id)
-            if link.status == wntr.network.LinkStatus.closed:
+            if link.status == wntr.network.LinkStatus.Closed:
                 vals.append(0)
                 vals.append(0)
             else:
@@ -1020,7 +1429,7 @@ class WNTRSimulator(WaterNetworkSimulator):
                     link = self._wn.get_link(link_name)
                     if link.start_node_name == to_node_name or link.end_node_name == to_node_name:
                         tmp_list.append(link)
-                        if link.status != wntr.network.LinkStatus.closed:
+                        if link.status != wntr.network.LinkStatus.Closed:
                             ndx1, ndx2 = ndx_map[link]
                             self._internal_graph.data[ndx1] = 1
                             self._internal_graph.data[ndx2] = 1
@@ -1037,17 +1446,16 @@ class WNTRSimulator(WaterNetworkSimulator):
     def _update_internal_graph(self):
         data = self._internal_graph.data
         ndx_map = self._map_link_to_internal_graph_data_ndx
-        for mgr in [self._presolve_controls, self._rules, self._postsolve_controls]:
-            for obj, attr in mgr.get_changes():
-                if 'status' == attr:
-                    if obj.status == wntr.network.LinkStatus.closed:
-                        ndx1, ndx2 = ndx_map[obj]
-                        data[ndx1] = 0
-                        data[ndx2] = 0
-                    else:
-                        ndx1, ndx2 = ndx_map[obj]
-                        data[ndx1] = 1
-                        data[ndx2] = 1
+        for obj, attr in self._change_tracker.get_changes(ref_point='graph'):
+            if 'status' == attr:
+                if obj.status == wntr.network.LinkStatus.Closed:
+                    ndx1, ndx2 = ndx_map[obj]
+                    data[ndx1] = 0
+                    data[ndx2] = 0
+                else:
+                    ndx1, ndx2 = ndx_map[obj]
+                    data[ndx1] = 1
+                    data[ndx2] = 1
 
         for key, link_list in self._node_pairs_with_multiple_links.items():
             first_link = link_list[0]
@@ -1055,10 +1463,11 @@ class WNTRSimulator(WaterNetworkSimulator):
             data[ndx1] = 0
             data[ndx2] = 0
             for link in link_list:
-                if link.status != wntr.network.LinkStatus.closed:
+                if link.status != wntr.network.LinkStatus.Closed:
                     ndx1, ndx2 = ndx_map[link]
                     data[ndx1] = 1
                     data[ndx2] = 1
+        self._change_tracker.reset_reference_point(key='graph')
 
     def _get_isolated_junctions_and_links(self):
         logger_level = logger.getEffectiveLevel()

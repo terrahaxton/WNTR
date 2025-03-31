@@ -1,3 +1,5 @@
+"""Model parameters for the WNTRSimulator."""
+
 import logging
 from wntr.sim import aml
 from wntr.utils.polynomial_interpolation import cubic_spline
@@ -15,7 +17,7 @@ def source_head_param(m, wn):
 
     Parameters
     ----------
-    m: wntr.aml.aml.aml.Model
+    m: wntr.sim.aml.aml.Model
     wn: wntr.network.model.WaterNetworkModel
     """
     if not hasattr(m, 'source_head'):
@@ -38,18 +40,20 @@ def expected_demand_param(m, wn):
 
     Parameters
     ----------
-    m: wntr.aml.aml.aml.Model
+    m: wntr.sim.aml.aml.Model
     wn: wntr.network.model.WaterNetworkModel
     """
     demand_multiplier = wn.options.hydraulic.demand_multiplier
+    pattern_start = wn.options.time.pattern_start
+    
     if not hasattr(m, 'expected_demand'):
         m.expected_demand = aml.ParamDict()
 
         for node_name, node in wn.junctions():
-            m.expected_demand[node_name] = aml.Param(node.demand_timeseries_list.at(wn.sim_time, multiplier=demand_multiplier))
+            m.expected_demand[node_name] = aml.Param(node.demand_timeseries_list.at(wn.sim_time+pattern_start, multiplier=demand_multiplier))
     else:
         for node_name, node in wn.junctions():
-            m.expected_demand[node_name].value = node.demand_timeseries_list.at(wn.sim_time, multiplier=demand_multiplier)
+            m.expected_demand[node_name].value = node.demand_timeseries_list.at(wn.sim_time+pattern_start, multiplier=demand_multiplier)
 
 
 class pmin_param(Definition):
@@ -60,7 +64,7 @@ class pmin_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -74,10 +78,15 @@ class pmin_param(Definition):
 
         for node_name in index_over:
             node = wn.get_node(node_name)
-            if node_name in m.pmin:
-                m.pmin[node_name].value = node.minimum_pressure
+            if node.minimum_pressure is None:
+                minimum_pressure = wn.options.hydraulic.minimum_pressure
             else:
-                m.pmin[node_name] = aml.Param(node.minimum_pressure)
+                minimum_pressure = node.minimum_pressure
+                
+            if node_name in m.pmin:
+                m.pmin[node_name].value = minimum_pressure
+            else:
+                m.pmin[node_name] = aml.Param(minimum_pressure)
 
             updater.add(node, 'minimum_pressure', pmin_param.update)
 
@@ -86,11 +95,11 @@ class pnom_param(Definition):
     @classmethod
     def build(cls, m, wn, updater, index_over=None):
         """
-        Add a nominal pressure parameter to the model
+        Add a required pressure parameter to the model
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -104,12 +113,19 @@ class pnom_param(Definition):
 
         for node_name in index_over:
             node = wn.get_node(node_name)
-            if node_name in m.pnom:
-                m.pnom[node_name].value = node.nominal_pressure
+            if node.required_pressure is None:
+                required_pressure = wn.options.hydraulic.required_pressure
             else:
-                m.pnom[node_name] = aml.Param(node.nominal_pressure)
+                required_pressure = node.required_pressure
+                
+            if required_pressure <= m.pdd_smoothing_delta:
+                raise ValueError('Required pressure for node %s must be greater than %s, the smoothing delta', node_name, m.pdd_smoothing_delta)
+            if node_name in m.pnom:
+                m.pnom[node_name].value = required_pressure
+            else:
+                m.pnom[node_name] = aml.Param(required_pressure)
 
-            updater.add(node, 'nominal_pressure', pnom_param.update)
+            updater.add(node, 'required_pressure', pnom_param.update)
 
 
 class leak_coeff_param(Definition):
@@ -120,7 +136,7 @@ class leak_coeff_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -150,7 +166,7 @@ class leak_area_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -180,7 +196,7 @@ class pdd_poly_coeffs_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -201,8 +217,14 @@ class pdd_poly_coeffs_param(Definition):
 
         for node_name in index_over:
             node = wn.get_node(node_name)
-            pmin = node.minimum_pressure
-            pnom = node.nominal_pressure
+            if node.minimum_pressure is None:
+                pmin = wn.options.hydraulic.minimum_pressure
+            else:
+                pmin = node.minimum_pressure
+            if node.required_pressure is None:
+                pnom = wn.options.hydraulic.required_pressure
+            else:
+                pnom = node.required_pressure
             x1 = pmin
             f1 = 0.0
             x2 = pmin + m.pdd_smoothing_delta
@@ -237,7 +259,7 @@ class pdd_poly_coeffs_param(Definition):
                 m.pdd_poly2_coeffs_d[node_name] = aml.Param(d2)
 
             updater.add(node, 'minimum_pressure', pdd_poly_coeffs_param.update)
-            updater.add(node, 'nominal_pressure', pdd_poly_coeffs_param.update)
+            updater.add(node, 'required_pressure', pdd_poly_coeffs_param.update)
 
 
 class leak_poly_coeffs_param(Definition):
@@ -248,7 +270,7 @@ class leak_poly_coeffs_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -295,7 +317,7 @@ class elevation_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -325,7 +347,7 @@ class hw_resistance_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -358,7 +380,7 @@ class minor_loss_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -390,7 +412,7 @@ class tcv_resistance_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -422,7 +444,7 @@ class pump_power_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -453,7 +475,7 @@ class valve_setting_param(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str

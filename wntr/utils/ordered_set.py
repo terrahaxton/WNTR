@@ -1,10 +1,9 @@
+"""An ordered set implementation (like an ordered dict)."""
+
 import sys
-if sys.version_info.major == 2:
-    from collections import MutableSet
-else:
-    from collections.abc import MutableSet
+from collections.abc import MutableSet
 from collections import OrderedDict
-from collections import Iterable
+from collections.abc import Iterable
 
 
 class OrderedSet(MutableSet):
@@ -16,7 +15,7 @@ class OrderedSet(MutableSet):
         Parameters
         ----------
         iterable: Iterable
-            An iterable with wich to initialize the set.
+            An iterable with which to initialize the set.
         """
         self._data = OrderedDict()
         if iterable is not None:

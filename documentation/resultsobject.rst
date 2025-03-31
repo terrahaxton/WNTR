@@ -19,7 +19,7 @@ Simulation results are stored in a results object which contains:
     >>> import pandas as pd
     >>> import matplotlib.pylab as plt
 	>>> import wntr
-    >>> pd.set_option('precision', 2)
+    >>> pd.set_option('display.precision', 2)
     >>> try:
     ...    wn = wntr.network.model.WaterNetworkModel('../examples/networks/Net3.inp')
     ... except:
@@ -43,13 +43,15 @@ As shown in the :ref:`hydraulic_simulation` and :ref:`water_quality_simulation` 
     >>> wn = wntr.network.WaterNetworkModel('networks/Net3.inp') # doctest: +SKIP
     >>> sim = wntr.sim.EpanetSimulator(wn)
     >>> results = sim.run_sim()
-	
+
 The node and link results are dictionaries of pandas DataFrames.  Each dictionary is a key:value pair, where
 the key is a result attribute (e.g., node demand, link flowrate) and the value is a DataFrame. 
 DataFrames are indexed by timestep (in seconds from the start of the simulation) with columns that are
 labeled using node or link names. 
+
 The use of pandas facilitates a comprehensive set of time series analysis options that can be used to evaluate results.
-For more information on pandas, see http://pandas.pydata.org/.
+For more information on pandas, see https://pandas.pydata.org.
+
 
 Conceptually, DataFrames can be visualized as blocks of data with 2 axis, as shown in :numref:`fig-dataframe`.
  
@@ -63,7 +65,7 @@ Conceptually, DataFrames can be visualized as blocks of data with 2 axis, as sho
 Node results include DataFrames for each of the following attributes:
 
 * Demand
-* Leak demand (only when the WNTRSimulator is used)
+* Leak demand (only when the WNTRSimulator is used, see the Note below)
 * Head
 * Pressure
 * Quality (only when the EpanetSimulator is used. Water age, tracer percent, or chemical concentration is stored, depending on the mode of water quality analysis)
@@ -75,14 +77,18 @@ For example, node results generated with the EpanetSimulator have the following 
     >>> node_keys = results.node.keys()
     >>> print(node_keys) # doctest: +SKIP
     dict_keys(['demand', 'head', 'pressure', 'quality']) 
-	
+
+.. note:: 
+   When using the WNTRSimulator, leak demand is distinct from demand, therefore **total demand = demand + leak demand**. 
+   When using the EpanetSimulator, emitters are included in demand, therefore **total demand = demand**.
+   
 Link results include DataFrames for each of the following attributes:
 
 * Velocity
 * Flowrate
-* Status (0 indicates closed, 1 indicates open)
+* Setting
+* Status (0 indicates closed pipe/pump/valve, 1 indicates open pipe/pump/valve, 2 indicates active valve)
 * Headloss (only when the EpanetSimulator is used)
-* Setting (only when the EpanetSimulator is used)
 * Friction factor (only when the EpanetSimulator is used)
 * Reaction rate (only when the EpanetSimulator is used)
 * Link quality (only when the EpanetSimulator is used)
@@ -94,7 +100,7 @@ For example, link results generated with the EpanetSimulator have the following 
 
     >>> link_keys = results.link.keys()
     >>> print(link_keys) # doctest: +SKIP
-    dict_keys(['flowrate', 'frictionfact', 'headloss', 'linkquality', 'rxnrate', 'setting', 'status', 'velocity']) 
+    dict_keys(['flowrate', 'friction_factor', 'headloss', 'quality', 'reaction_rate', 'setting', 'status', 'velocity']) 
 
 To access node pressure over all nodes and times:
 
@@ -108,11 +114,11 @@ DataFrames can be sliced to extract specific information. For example, to access
 
     >>> pressure_at_node123 = pressure.loc[:,'123']
     >>> print(pressure_at_node123.head()) 
-    0       47.08
-    900     47.13
-    1800    47.18
-    2700    47.23
-    3600    47.94
+    0        47.08
+    3600     47.95
+    7200     48.75
+    10800    49.13
+    14400    50.38
     Name: 123, dtype: float32
 	
 To access the pressure at time 3600 over all nodes (values displayed to 2 decimal places):
@@ -125,8 +131,8 @@ To access the pressure at time 3600 over all nodes (values displayed to 2 decima
     10    28.25
     15    28.89
     20     9.10
-    35    41.52
-    40     4.18
+    35    41.51
+    40     4.19
     Name: 3600, dtype: float32
 	
 Data can be plotted as a time series, as shown in :numref:`fig-plot-timeseries`:
@@ -147,7 +153,8 @@ Data can be plotted as a time series, as shown in :numref:`fig-plot-timeseries`:
 
     >>> plt.tight_layout()
     >>> plt.savefig('plot_timeseries.png', dpi=300)
-    
+    >>> plt.close()
+
 .. _fig-plot-timeseries:
 .. figure:: figures/plot_timeseries.png
    :width: 640
@@ -168,7 +175,7 @@ plotted in a similar manner.
     
 .. doctest::
 
-    >>> nodes, edges = wntr.graphics.plot_network(wn, node_attribute=pressure_at_1hr, 
+    >>> ax = wntr.graphics.plot_network(wn, node_attribute=pressure_at_1hr, 
     ...    node_range=[30,55], node_colorbar_label='Pressure (m)')
 
 .. doctest::
@@ -176,7 +183,8 @@ plotted in a similar manner.
 
     >>> plt.tight_layout()
     >>> plt.savefig('plot_network.png', dpi=300)
-    
+    >>> plt.close()
+
 .. _fig-plot-network:
 .. figure:: figures/plot_network.png
    :width: 640
@@ -188,7 +196,7 @@ Network and time series graphics can be customized to add titles, legends, axis 
    
 Pandas includes methods to write DataFrames to the following file formats:
 
-* Excel
+* Microsoft Excel (xlsx)
 * Comma-separated values (CSV)
 * Hierarchical Data Format (HDF)
 * JavaScript Object Notation (JSON)
@@ -199,4 +207,20 @@ For example, DataFrames can be saved to Excel files using:
    >>> pressure.to_excel('pressure.xlsx')
 
 .. note:: 
-   The Pandas method ``to_excel`` requires the Python package **openpyxl** [GaCl18]_, which is an optional dependency of WNTR.
+   The Pandas method ``to_excel`` requires the Python package **openpyxl** :cite:p:`gacl18`, which is an optional dependency of WNTR.
+
+
+Water quality results
+---------------------
+Water quality metrics are stored under the 'quality' key of the node and link results
+if the EpanetSimulator is used. The units of the quality results depend on the quality
+parameter that is used (see :ref:`_water_quality_simulation`) and can be the age,
+concentration, or the fraction of water that belongs to a tracer. If the parameter
+is set to 'NONE', then the quality results will be zero. 
+
+The quality of a link is equal to the average across the length of the link. The quality
+at a node is the instantaneous value.
+
+When using the EPANET-MSX water quality model, each species is given its own key in the
+node and link results objects, and the 'quality' results still references the EPANET
+water quality results.

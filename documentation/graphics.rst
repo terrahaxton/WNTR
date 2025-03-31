@@ -6,17 +6,22 @@
     :hide:
 
     >>> import wntr
+    >>> import numpy as np
     >>> import matplotlib.pylab as plt
+    >>> import pandas as pd
+    >>> pd.set_option("display.precision", 3)
     >>> try:
     ...    wn = wntr.network.model.WaterNetworkModel('../examples/networks/Net3.inp')
     ... except:
     ...    wn = wntr.network.model.WaterNetworkModel('examples/networks/Net3.inp')
-	
+
+.. _graphics:
+
 Graphics
 ======================================
 
 WNTR includes several functions to plot water network models and to plot 
-fragility and pump curves.
+fragility curves, pump curves, tank curves, and valve layers.
 
 Networks
 --------------------
@@ -37,8 +42,8 @@ Node and link attributes can be specified using the following options:
 * List of node/link names (i.e., ``['123', '199']``), this highlights the node or link in red
 
 The following example plots the network along with node elevation (:numref:`fig-network-2`).
-Note that the :class:`~wntr.graphics.network.plot_network` function returns matplotlib objects 
-for the network nodes and edges, which can be further customized by the user.
+Note that the :class:`~wntr.graphics.network.plot_network` function returns a matplotlib axes object
+which can be further customized by the user.
 
 .. doctest::
     :hide:
@@ -50,7 +55,7 @@ for the network nodes and edges, which can be further customized by the user.
     >>> import wntr # doctest: +SKIP
 	
     >>> wn = wntr.network.WaterNetworkModel('networks/Net3.inp') # doctest: +SKIP
-    >>> nodes, edges = wntr.graphics.plot_network(wn, node_attribute='elevation', 
+    >>> ax = wntr.graphics.plot_network(wn, node_attribute='elevation', 
     ...    node_colorbar_label='Elevation (m)')
 
 .. doctest::
@@ -58,13 +63,71 @@ for the network nodes and edges, which can be further customized by the user.
 
     >>> plt.tight_layout()
     >>> plt.savefig('plot_basic_network.png', dpi=300)
-    
+    >>> plt.close()
+
 .. _fig-network-2:
 .. figure:: figures/plot_basic_network.png
    :width: 640
    :alt: Network
    
    Basic network graphic.
+   
+Additional network plot examples are included below (:numref:`fig-network-3`). 
+This includes the use of data stored as 
+a Pandas Series (pipe velocity from simulation results), 
+a dictionary (the length of the five longest pipes), and
+a list of strings (tank names).
+The example also combines multiple images into one figure using subplots and 
+changes the colormap from the default `Spectral_r` to `viridis` in one plot.
+See https://matplotlib.org for more colormap options.
+
+.. doctest::
+
+    >>> sim = wntr.sim.EpanetSimulator(wn)
+    >>> results = sim.run_sim()
+    >>> velocity = results.link['velocity'].loc[3600,:]
+    >>> print(velocity.head())
+    name
+    20     0.039
+    40     0.013
+    50     0.004
+    60     2.824
+    101    1.320
+    Name: 3600, dtype: float32
+	
+    >>> length = wn.query_link_attribute('length')
+    >>> length_top5 = length.sort_values(ascending=False)[0:5]
+	>>> length_top5 = length_top5.round(2).to_dict()
+    >>> print(length_top5)
+    {'329': 13868.4, '101': 4328.16, '137': 1975.1, '169': 1389.89, '204': 1380.74}
+	
+    >>> tank_names = wn.tank_name_list
+    >>> print(tank_names)
+    ['1', '2', '3']
+	
+    >>> fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    >>> ax = wntr.graphics.plot_network(wn, link_attribute=velocity, 
+    ...    title='Pipe velocity at hour 1', link_colorbar_label='Velocity (m/s)', ax=axes[0])
+    >>> ax = wntr.graphics.plot_network(wn, link_attribute=length_top5, link_width=2, 
+    ...    title='Longest 5 pipes', link_cmap = plt.cm.viridis, 
+    ...    link_colorbar_label='Pipe length (m)', ax=axes[1])
+    >>> ax = wntr.graphics.plot_network(wn, node_attribute=tank_names, 
+    ...    title='Location of tanks', ax=axes[2])
+	
+.. doctest::
+    :hide:
+
+    >>> plt.tight_layout()
+    >>> plt.savefig('plot_subplot_basic_network.png', dpi=300)
+    >>> plt.close()
+
+.. _fig-network-3:
+.. figure:: figures/plot_subplot_basic_network.png
+   :width: 800
+   :alt: Network
+   
+   Additional network graphics.
+   
    
 Interactive plotly networks
 ---------------------------------
@@ -76,7 +139,7 @@ As with basic network graphics, a wide range of plotting options can be supplied
 However, link attributes currently cannot be displayed on the graphic.
 
 .. note:: 
-   This function requires the Python package **plotly** [SPHC16]_, which is an optional dependency of WNTR.
+   This function requires the Python package **plotly** :cite:p:`sphc16`, which is an optional dependency of WNTR.
    
 The following example plots the network along with node population (:numref:`fig-plotly`).
 
@@ -88,11 +151,11 @@ The following example plots the network along with node population (:numref:`fig
 
 .. _fig-plotly:
 .. figure:: figures/plot_plotly_network.png
-   :width: 715
+   :width: 640
    :alt: Network
 
    Interactive network graphic with the legend showing the node population.
-   
+ 
 Interactive Leaflet networks
 ------------------------------------------
 Interactive Leaflet network graphics can be generated using the 
@@ -103,10 +166,10 @@ See :ref:`modify_node_coords` for more information on converting node coordinate
 As with basic network graphics, a wide range of plotting options can be supplied. 
 
 .. note:: 
-   This function requires the Python package **folium** [Folium]_, which is an optional dependency of WNTR.
+   This function requires the Python package **folium** :cite:p:`folium`, which is an optional dependency of WNTR.
    
 The following example using EPANET Example Network 3 (Net3) converts node coordinates to longitude/latitude and plots the network along 
-with pipe length over the city of Albuquerque (for demonstration purposes only) (:numref:`fig-leaflet`). The longitude and latitude for two locations are needed to plot the network. For the EPANET Example Network 3, these locations are the reservoir 'Lake' and node '219'. This example requires the Python package **utm** [Bieni19]_ to convert the node coordinates.
+with pipe length over the city of Albuquerque (for demonstration purposes only) (:numref:`fig-leaflet`). The longitude and latitude for two locations are needed to plot the network. For the EPANET Example Network 3, these locations are the reservoir 'Lake' and node '219'. This example requires the Python package **utm** :cite:p:`bieni19` to convert the node coordinates.
 
 .. doctest::
 
@@ -131,6 +194,7 @@ with pipe length over the city of Albuquerque (for demonstration purposes only) 
         <iframe src="_static/comp_leaflet_map.html" frameborder="0" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe>
     </div>
 
+
 Network animation
 ----------------------
 
@@ -139,14 +203,17 @@ function :class:`~wntr.graphics.network.network_animation`. Node and link attrib
 index is time and columns are the node or link name.  
 
 The following example creates a network animation of water age over time.
+The ``node_range`` parameter indicates the minimum and maximum values to use 
+when mapping colors to ``node_attribute`` values.
 
 .. doctest::
 
-    >>> wn.options.quality.mode = 'AGE'
+    >>> wn.options.quality.parameter = 'AGE'
     >>> sim = wntr.sim.EpanetSimulator(wn)
     >>> results = sim.run_sim()
     >>> water_age = results.node['quality']/3600 # convert seconds to hours
-    >>> anim = wntr.graphics.network_animation(wn, node_attribute=water_age, node_range=[0,24]) # doctest: +SKIP
+    >>> anim = wntr.graphics.network_animation(wn, node_attribute=water_age, 
+    ...     node_range=[0,24]) # doctest: +SKIP
    
 Time series
 ------------------
@@ -181,7 +248,7 @@ Interactive time series graphics are useful when visualizing large datasets.
 Basic time series graphics can be converted to interactive time series graphics using the ``plotly.express`` module.
 
 .. note:: 
-   This functionality requires the Python package **plotly** [SPHC16]_, which is an optional dependency of WNTR.
+   This functionality requires the Python package **plotly** :cite:p:`sphc16`, which is an optional dependency of WNTR.
    
 The following example uses simulation results from above, and converts the graphic to an interactive graphic  (:numref:`fig-interactive-timeseries`).
 
@@ -190,7 +257,7 @@ The following example uses simulation results from above, and converts the graph
     >>> import plotly.express as px
 	
     >>> tankH = results.node['pressure'].loc[:,wn.tank_name_list]
-    >>> tankH = tankH * 3.28084 # Convert tank height to ft
+    >>> tankH = tankH * 3.28084 # Convert tank head to ft
     >>> tankH.index /= 3600 # convert time to hours
     >>> fig = px.line(tankH)
     >>> fig = fig.update_layout(xaxis_title='Time (hr)', yaxis_title='Head (ft)', 
@@ -202,7 +269,8 @@ The following example uses simulation results from above, and converts the graph
 
     >>> plt.tight_layout()
     >>> plt.savefig('plot_pump_curve.png', dpi=300)
-	
+    >>> plt.close()
+
 .. _fig-interactive-timeseries:
 .. figure:: figures/interactive_timeseries.png
    :width: 640
@@ -237,7 +305,7 @@ The following example plots a fragility curve with two states (:numref:`fig-frag
 
 .. _fig-fragility2:
 .. figure:: figures/fragility_curve.png
-   :width: 800
+   :width: 640
    :alt: Fragility curve
 
    Fragility curve graphic.
@@ -266,11 +334,130 @@ The following example plots a pump curve (:numref:`fig-pump`).
 
     >>> plt.tight_layout()
     >>> plt.savefig('plot_pump_curve.png', dpi=300)
-    
+    >>> plt.close()
+
 .. _fig-pump:
 .. figure:: figures/plot_pump_curve.png
-   :width: 800
+   :width: 640
    :alt: Pump curve
 
    Pump curve graphic.
    
+Tank volume curves
+-------------------
+
+Tank curves and profiles can be plotted using the 
+function :class:`~wntr.graphics.curve.plot_tank_volume_curve`.
+
+The following example creates a tank curve and then plots the curve and 
+corresponding tank profile (:numref:`fig-tank`). The profile is 
+plotted as a stairstep line between points.  The minimum and maximum 
+level of the tank is included in the figure.
+
+.. doctest::
+    :hide:
+    
+    >>> fig = plt.figure()
+    
+.. doctest::
+
+    >>> wn.add_curve('Curve', 'VOLUME', [
+    ...    (1,	0),
+    ...    (2,	60),
+    ...    (3,	188),
+    ...    (4,	372),
+    ...    (5,	596),
+    ...    (6,	848),
+    ...    (7,	1114),
+    ...    (8,	1379),
+    ...    (9,	1631),
+    ...    (10, 1856),
+    ...    (11, 2039),
+    ...    (12, 2168),
+    ...    (13, 2228)])
+    >>> tank = wn.get_node('2')
+    >>> tank.vol_curve_name = 'Curve'
+    >>> ax = wntr.graphics.plot_tank_volume_curve(tank)
+
+.. doctest::
+    :hide:
+
+    >>> plt.tight_layout()
+    >>> plt.savefig('plot_tank_volume_curve.png', dpi=300)
+    >>> plt.close()
+
+.. _fig-tank:
+.. figure:: figures/plot_tank_volume_curve.png
+   :width: 800
+   :alt: Tank curve and profile
+
+   Tank curve and profile graphic.
+
+Valve layers and segments
+--------------------------
+
+Valve layers and valve segment attributes can be plotted using the 
+function :class:`~wntr.graphics.curve.plot_valve_layer`.
+The following example starts by generating a valve layer and valve segments. 
+The valves and valve segments are plotted on the network (:numref:`fig-valve_segment`). 
+
+.. doctest::
+    :hide:
+    
+    >>> fig = plt.figure()
+    
+.. doctest::
+
+    >>> valve_layer = wntr.network.generate_valve_layer(wn, 'strategic', 2, seed=123)
+    >>> G = wn.to_graph()   
+    >>> node_segments, link_segments, seg_sizes = wntr.metrics.topographic.valve_segments(G, 
+    ...     valve_layer)
+    >>> N = seg_sizes.shape[0] 
+    >>> cmap = wntr.graphics.random_colormap(N) # random color map helps view segments
+    >>> ax = wntr.graphics.plot_network(wn, link_attribute=link_segments, node_size=0, 
+    ...     link_width=2, node_range=[0,N], link_range=[0,N], node_cmap=cmap, 
+    ...     link_cmap=cmap, link_colorbar_label='Segment ID')
+    >>> ax = wntr.graphics.plot_valve_layer(wn, valve_layer, add_colorbar=False, 
+    ...     include_network=False, ax=ax)
+
+.. doctest::
+    :hide:
+
+    >>> plt.tight_layout()
+    >>> plt.savefig('plot_valve_segment.png', dpi=300)
+    >>> plt.close()
+
+.. _fig-valve_segment:
+.. figure:: figures/plot_valve_segment.png
+   :width: 640
+   :alt: Valve segment attributes
+
+   Valves layer and segments.
+   
+.. doctest::
+    :hide:
+    
+    >>> fig = plt.figure()
+	
+Valve segment attributes are then computed and the number of 
+valves surrounding each valve is plotted on the network
+(:numref:`fig-valve_segment_attributes`).  
+
+    >>> valve_attributes = wntr.metrics.valve_segment_attributes(valve_layer, node_segments, 
+    ...     link_segments)
+    >>> ax = wntr.graphics.plot_valve_layer(wn, valve_layer, 
+    ...     valve_attributes['num_surround'], colorbar_label='Surrounding valves')
+
+.. doctest::
+    :hide:
+
+    >>> plt.tight_layout()
+    >>> plt.savefig('plot_valve_segment_attributes.png', dpi=300)
+    >>> plt.close()
+
+.. _fig-valve_segment_attributes:
+.. figure:: figures/plot_valve_segment_attributes.png
+   :width: 640
+   :alt: Valve segment attributes
+
+   Valve segment attribute showing the number of valves surrounding each valve.

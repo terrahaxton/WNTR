@@ -65,7 +65,7 @@ link p1 open at clocktime 22
  Duration           	24:00 
  Hydraulic Timestep 	1:00 
  Quality Timestep   	1:00 
- Rule Timesetp		1:00
+ Rule Timestep		1:00
  Pattern Timestep   	6:00 
  Pattern Start      	0:00 
  Report Timestep    	1:00 
@@ -85,13 +85,21 @@ link p1 open at clocktime 22
  Pattern            	pattern1
  Demand Multiplier  	1.0
  Tolerance          	0.01
-
+ Demand Model           PDA
+ Minimum Pressure       0
+ Required Pressure      20
+ Pressure Exponent      0.5
+ Pressure               psi
+ 
 [REPORT]
  Status             	Yes
  Summary            	No
  Energy			No
 
 [VERTICES]
+;Link            	X-Coord           	Y-Coord
+p1	15	5
+p1	20	5
 
 [LABELS]
 

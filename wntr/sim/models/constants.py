@@ -1,3 +1,5 @@
+"""Contant values used by WNTRSimulator."""
+
 import logging
 from wntr.utils.polynomial_interpolation import cubic_spline
 
@@ -31,7 +33,7 @@ def darcy_weisbach_constants(m):
 
 
 def pdd_constants(m):
-    m.pdd_smoothing_delta = 0.2
+    m.pdd_smoothing_delta = 0.05
     m.pdd_slope = 1e-11
 
 

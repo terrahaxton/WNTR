@@ -1,3 +1,5 @@
+"""Modeling constraints for the WNTRSimulator."""
+
 import logging
 from wntr.sim import aml
 import wntr.network
@@ -17,7 +19,7 @@ class mass_balance_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -56,7 +58,7 @@ class pdd_mass_balance_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -95,7 +97,7 @@ class piecewise_hazen_williams_headloss_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -157,7 +159,7 @@ class approx_hazen_williams_headloss_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -212,12 +214,13 @@ class pdd_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
             list of junction names; default is all junctions in wn
         """
+
         if not hasattr(m, 'pdd'):
             m.pdd = aml.ConstraintDict()
 
@@ -232,7 +235,12 @@ class pdd_constraint(Definition):
             h = m.head[node_name]
             d = m.demand[node_name]
             d_expected = m.expected_demand[node_name]
-
+            
+            if node.pressure_exponent is None:
+                pressure_exponent = wn.options.hydraulic.pressure_exponent
+            else:
+                pressure_exponent = node.pressure_exponent
+                
             if not node._is_isolated:
                 pmin = m.pmin[node_name]
                 pnom = m.pnom[node_name]
@@ -250,7 +258,7 @@ class pdd_constraint(Definition):
                 con = aml.ConditionalExpression()
                 con.add_condition(aml.inequality(body=h - elev - pmin, ub=0), d - d_expected*slope*(h-elev-pmin))
                 con.add_condition(aml.inequality(body=h - elev - pmin - delta, ub=0), d - d_expected*(a1*(h-elev)**3 + b1*(h-elev)**2 + c1*(h-elev) + d1))
-                con.add_condition(aml.inequality(body=h - elev - pnom + delta, ub=0), d - d_expected*((h-elev-pmin)/(pnom-pmin))**0.5)
+                con.add_condition(aml.inequality(body=h - elev - pnom + delta, ub=0), d - d_expected*((h-elev-pmin)/(pnom-pmin))**pressure_exponent)
                 con.add_condition(aml.inequality(body=h - elev - pnom, ub=0), d - d_expected*(a2*(h-elev)**3 + b2*(h-elev)**2 + c2*(h-elev) + d2))
                 con.add_final_expr(d - d_expected*(slope*(h - elev - pnom) + 1.0))
                 con = aml.Constraint(con)
@@ -268,7 +276,7 @@ class head_pump_headloss_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -334,7 +342,7 @@ class power_pump_headloss_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -385,7 +393,7 @@ class prv_headloss_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -495,7 +503,7 @@ class fcv_headloss_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -553,7 +561,7 @@ class tcv_headloss_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.aml.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
@@ -614,7 +622,7 @@ class leak_constraint(Definition):
 
         Parameters
         ----------
-        m: wntr.aml.Model
+        m: wntr.sim.aml.aml.Model
         wn: wntr.network.model.WaterNetworkModel
         updater: ModelUpdater
         index_over: list of str
